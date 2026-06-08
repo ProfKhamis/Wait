@@ -1,0 +1,530 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Khamis DYNAMIC STRAT | REFACTORED UNDER/OVER ENGINE</title>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&family=Inter:wght@300;500;700&display=swap" rel="stylesheet">
+    <style>
+        :root { --primary: #00d2ff; --accent: #9d50bb; --success: #00ff88; --danger: #ff4b2b; --glass: rgba(15, 20, 25, 0.85); }
+        
+        body { 
+            background: radial-gradient(circle at top right, #1a1c2c, #0a0b10); 
+            color: #e0e0e0; font-family: 'Inter', sans-serif; margin: 0; 
+            min-height: 100vh; display: flex; justify-content: center; align-items: flex-start;
+            padding: 10px; box-sizing: border-box;
+        }
+
+        /* High-Speed Verification Audit Modal */
+        #audit-modal {
+            position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%) scale(0.8);
+            background: rgba(10, 11, 16, 0.95); border: 2px solid var(--primary);
+            padding: 25px; border-radius: 20px; backdrop-filter: blur(25px);
+            z-index: 10000; opacity: 0; pointer-events: none; transition: 0.1s cubic-bezier(0.075, 0.82, 0.165, 1);
+            text-align: center; box-shadow: 0 0 50px rgba(0, 0, 0, 0.9); width: 85%; max-width: 340px;
+        }
+        #audit-modal.active { opacity: 1; transform: translate(-50%, -50%) scale(1); pointer-events: auto; }
+        .audit-title { font-family: 'Orbitron'; font-size: 1.1rem; color: #fff; letter-spacing: 1px; margin-bottom: 15px; }
+        .audit-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 15px; }
+        .audit-box { background: rgba(255,255,255,0.04); padding: 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05); }
+        .audit-num { font-family: 'Orbitron'; font-size: 1.8rem; font-weight: bold; margin-top: 5px; }
+
+        .glass-panel {
+            background: var(--glass); backdrop-filter: blur(20px);
+            border: 1px solid rgba(255,255,255,0.1); border-radius: 20px;
+            width: 100%; max-width: 950px; padding: 20px; 
+            display: flex; flex-direction: column; gap: 20px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.6); margin-top: 10px;
+        }
+
+        .main-col { width: 100%; }
+        .data-col { width: 100%; margin-top: 15px; }
+
+        .stat-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+        .stat-box { background: rgba(255,255,255,0.03); padding: 12px; border-radius: 12px; border: 1px solid rgba(255,255,255,0.05); text-align: center; }
+        .stat-label { font-size: 0.65rem; color: #8b949e; text-transform: uppercase; margin-bottom: 4px; letter-spacing: 0.5px; }
+        .stat-val { font-size: 1.1rem; font-weight: 700; font-family: 'Orbitron'; }
+
+        .config-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; background: rgba(255,255,255,0.01); padding: 12px; border-radius: 12px; border: 1px solid rgba(255,255,255,0.03); }
+        .config-box { display: flex; flex-direction: column; gap: 4px; }
+        .config-input { 
+            background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.15); 
+            color: #fff; padding: 8px; border-radius: 8px; font-family: 'Orbitron'; 
+            font-size: 0.9rem; text-align: center; outline: none; transition: 0.2s;
+        }
+
+        .digit-hero {
+            background: rgba(255,255,255,0.02); border-radius: 15px; padding: 25px 10px;
+            text-align: center; border: 1px solid rgba(255,255,255,0.05); position: relative;
+        }
+        #digit { font-family: 'Orbitron'; font-size: 6.5rem; font-weight: 700; color: var(--primary); line-height: 1; margin: 10px 0; text-shadow: 0 0 20px rgba(0, 210, 255, 0.3); }
+        
+        .progress-container { margin: 10px 0; }
+        .progress-bar { background: rgba(255,255,255,0.05); height: 10px; border-radius: 5px; overflow: hidden; margin-top: 5px; border: 1px solid rgba(255,255,255,0.1); }
+        #progress-fill { height: 100%; width: 0%; background: linear-gradient(90deg, var(--primary), var(--accent)); transition: 0.5s; }
+
+        .log-container { background: rgba(0,0,0,0.4); border-radius: 12px; max-height: 250px; overflow-y: auto; border: 1px solid rgba(255,255,255,0.08); margin-top: 5px; }
+        table { width: 100%; border-collapse: collapse; font-size: 0.75rem; }
+        th { padding: 12px 10px; color: #8b949e; border-bottom: 1px solid rgba(255,255,255,0.08); text-transform: uppercase; font-size: 0.65rem; background: rgba(0,0,0,0.2); }
+        td { padding: 11px 10px; text-align: center; border-bottom: 1px solid rgba(255,255,255,0.03); font-weight: 500; color: #ffffff; }
+
+        .btn-action {
+            background: linear-gradient(45deg, var(--primary), var(--accent));
+            border: none; color: white; padding: 14px; border-radius: 12px;
+            font-weight: bold; cursor: pointer; font-family: 'Orbitron'; text-transform: uppercase;
+            width: 100%; box-shadow: 0 8px 15px rgba(0, 210, 255, 0.2); transition: 0.2s;
+        }
+
+        @media (min-width: 768px) {
+            .glass-panel { flex-direction: row; padding: 30px; }
+            .main-col { flex: 1.3; }
+            .data-col { flex: 1.1; display: flex; flex-direction: column; gap: 15px; margin-top: 0; }
+            #digit { font-size: 8.5rem; }
+            .log-container { max-height: 340px; }
+        }
+    </style>
+</head>
+<body>
+
+<div id="audit-modal">
+    <div class="audit-title" id="audit-title">SPEED AUDIT DISPATCHED</div>
+    <div class="audit-grid">
+        <div class="audit-box">
+            <div class="stat-label">Target Barrier</div>
+            <div class="audit-num" id="audit-target" style="color: var(--primary);">--</div>
+        </div>
+        <div class="audit-box">
+            <div class="stat-label">Exit Tick Digit</div>
+            <div class="audit-num" id="audit-exit" style="color: #fff;">--</div>
+        </div>
+    </div>
+    <div id="audit-outcome" style="font-family: 'Orbitron'; font-weight: bold; font-size: 1.2rem; padding: 5px 0;">--</div>
+    <button class="btn-action" style="margin-top:15px; padding:10px; font-size:0.75rem;" onclick="closeAudit()">Dismiss Audit Panel</button>
+</div>
+
+<div class="glass-panel">
+    <div class="main-col">
+        <div class="config-grid" style="grid-template-columns: 1fr; margin-bottom: 15px; border-color: var(--primary);">
+            <div class="config-box">
+                <label class="stat-label" style="color: var(--primary); font-weight: bold;">Deriv API Authentication</label>
+                <div style="display: flex; gap: 8px;">
+                    <input type="password" id="api-token" class="config-input" style="flex: 1; text-align: left; padding-left: 12px;" placeholder="Paste your Deriv API Account Token here...">
+                    <button id="btn-connect" class="btn-action" style="padding: 0 20px; width: auto; font-size: 0.8rem;" onclick="connectAccount()">Connect Bot</button>
+                </div>
+            </div>
+        </div>
+
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+            <div style="font-family: 'Orbitron'; font-size: 1.1rem; color: var(--primary);">SOVEREIGN V14</div>
+            <div id="mkt-badge" style="font-size: 0.65rem; background: rgba(0,210,255,0.1); padding: 4px 8px; border-radius: 4px; border: 1px solid var(--primary); font-family: 'Orbitron';">DISCONNECTED</div>
+        </div>
+
+        <div class="digit-hero">
+            <div id="digit">--</div>
+            <div id="status" style="font-size: 0.7rem; color: #8b949e; letter-spacing: 1px; font-weight: bold; text-transform: uppercase;">ENTER API TOKEN ABOVE TO BEGIN</div>
+        </div>
+
+        <div class="progress-container">
+            <div style="display: flex; justify-content: space-between; font-size: 0.65rem; font-weight: 600;">
+                <span id="prog-label">SESSION MILESTONE PROGRESS</span>
+                <span id="prog-val">$0.00 / $2.50</span>
+            </div>
+            <div class="progress-bar"><div id="progress-fill"></div></div>
+        </div>
+        
+        <div class="stat-grid" style="margin-top: 15px;">
+            <div class="stat-box"><div class="stat-label">Active Milestone</div><div id="ui-milestone" class="stat-val" style="color:var(--primary)">1 / 4</div></div>
+            <div class="stat-box"><div class="stat-label">Total Net Profit</div><div id="ui-total-profit" class="stat-val" style="color:var(--success)">$0.00</div></div>
+        </div>
+    </div>
+
+    <div class="data-col">
+        <div class="stat-grid">
+            <div class="stat-box"><div class="stat-label">Live Balance</div><div id="bal" class="stat-val" style="color:var(--success)">$0.00</div></div>
+            <div class="stat-box"><div class="stat-label">Current Stake</div><div id="stk" class="stat-val">$2.00</div></div>
+        </div>
+
+        <div class="config-grid">
+            <div class="config-box">
+                <label class="stat-label">Base Stake ($)</label>
+                <input type="number" id="param-stake" class="config-input" value="2.00" step="0.5" oninput="syncParameters()">
+            </div>
+            <div class="config-box">
+                <label class="stat-label">Martingale Mult.</label>
+                <input type="number" id="param-multi" class="config-input" value="2.0" step="0.1" oninput="syncParameters()">
+            </div>
+            <div class="config-box">
+                <label class="stat-label">Ultimate TP ($)</label>
+                <input type="number" id="param-tp" class="config-input" value="10.00" step="1" oninput="syncParameters()">
+            </div>
+            <div class="config-box">
+                <label class="stat-label">Stop Loss ($)</label>
+                <input type="number" id="param-sl" class="config-input" value="15.00" step="1" oninput="syncParameters()">
+            </div>
+        </div>
+
+        <div class="log-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th>MARKET</th>
+                        <th>TARGET TYPE</th>
+                        <th>EXIT TICK</th>
+                        <th>RESULT</th>
+                        <th>STAKE</th>
+                    </tr>
+                </thead>
+                <tbody id="logs"></tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<script>
+    const APP_ID = 126967;
+    let CONFIG = { stake: 2.00, multi: 2.0, tp: 10.00, sl: 15.00 };
+    
+    const MILESTONE_SESSIONS = 4; 
+    let currentMilestone = 1;
+    let subMilestoneTarget = 0.00;
+    let subMilestoneProfit = 0.00;
+    let totalProfit = 0.00;
+    let isCooldown = false;
+
+    let MARKETS = [];
+    let mIdx = 0;
+    let trades = 0;
+    let wins = 0;
+    let totalTrades = 0;
+    let digitHistory = [];
+    let isBusy = false;
+    let botStopped = true; 
+    let ws = null;
+    let consecutiveLosses = 0;
+    let currentStrategyMode = 'OVER'; 
+
+    function syncParameters() {
+        CONFIG.stake = parseFloat(document.getElementById('param-stake').value) || 2.00;
+        CONFIG.multi = parseFloat(document.getElementById('param-multi').value) || 2.0;
+        CONFIG.tp = parseFloat(document.getElementById('param-tp').value) || 10.00;
+        CONFIG.sl = parseFloat(document.getElementById('param-sl').value) || 15.00;
+        subMilestoneTarget = CONFIG.tp / MILESTONE_SESSIONS;
+    }
+
+    window.addEventListener('load', () => {
+        const savedToken = localStorage.getItem('deriv_api_token');
+        if(savedToken) document.getElementById('api-token').value = savedToken;
+        syncParameters();
+    });
+
+    function connectAccount() {
+        const token = document.getElementById('api-token').value.trim();
+        if(!token) return alert("Please paste a valid Account API Token.");
+
+        localStorage.setItem('deriv_api_token', token);
+        if (ws) ws.close();
+
+        document.getElementById('status').innerText = "CONNECTING TO WEBSOCKET...";
+        document.getElementById('status').style.color = "var(--primary)";
+
+        ws = new WebSocket(`wss://ws.binaryws.com/websockets/v3?app_id=${APP_ID}`);
+        
+        ws.onopen = () => {
+            ws.send(JSON.stringify({ "authorize": token }));
+        };
+
+        ws.onmessage = (e) => {
+            const res = JSON.parse(e.data);
+            
+            if (res.error) {
+                console.error("Deriv Error: ", res.error.message);
+                document.getElementById('status').innerHTML = `<span style="color:var(--danger)">API ERROR: ${res.error.message}</span>`;
+                if (res.msg_type === 'buy') {
+                    isBusy = false; 
+                    setTimeout(rotate, 1000);
+                }
+                return;
+            }
+            
+            if (res.msg_type === 'authorize') {
+                botStopped = false; 
+                document.getElementById('status').innerText = "CONNECTED! STRUCTURING VOLATILITY ASSETS...";
+                ws.send(JSON.stringify({ "balance": 1, "subscribe": 1 }));
+                ws.send(JSON.stringify({ "active_symbols": "brief", "product_type": "basic" }));
+            }
+            
+            if (res.msg_type === 'balance') {
+                document.getElementById('bal').innerText = `$${res.balance.balance.toFixed(2)}`;
+            }
+
+            if (res.msg_type === 'active_symbols') {
+                const symbols = res.active_symbols.filter(s => 
+                    s.market === "synthetic_index" && 
+                    s.submarket === "random_index" &&
+                    (s.symbol.match(/^R_\d+$/) || s.symbol.match(/^1HZ\d+V$/))
+                );
+                MARKETS = symbols.map(s => s.symbol).sort();
+                if(MARKETS.length === 0) {
+                    MARKETS = ["R_10", "1HZ10V", "R_25", "1HZ25V", "R_50", "1HZ50V", "R_75", "1HZ75V", "R_100", "1HZ100V"];
+                }
+                startMarket();
+            }
+            
+            if (res.tick) {
+                // FIXED: Extracts string display_value to secure trailing zeros (.40 doesn't turn into .4)
+                const targetTickString = res.tick.display_value || res.tick.quote.toString();
+                const d = parseInt(targetTickString.slice(-1));
+                
+                digitHistory.push(d);
+                if (digitHistory.length > 2) digitHistory.shift();
+                
+                if (digitHistory.length === 2 && !isBusy && !botStopped && !isCooldown) {
+                    evaluatePatternAndSnipe();
+                }
+
+                setTimeout(() => {
+                    document.getElementById('digit').innerText = d;
+                    updateStatusUI();
+                }, 0);
+            }
+            
+            if (res.msg_type === 'proposal_open_contract' && res.proposal_open_contract.is_sold) {
+                handleFinish(res.proposal_open_contract);
+            }
+        };
+
+        ws.onerror = () => {
+            document.getElementById('status').innerText = "CONNECTION FAILURE";
+            document.getElementById('status').style.color = "var(--danger)";
+        };
+    }
+
+    function updateStatusUI() {
+        if (botStopped) return;
+        if (isCooldown) {
+            document.getElementById('status').innerHTML = `<span style="color:var(--primary); font-weight:bold;">COOLDOWN PAUSE... ROTATING ASSETS</span>`;
+            return;
+        }
+        const stateStr = consecutiveLosses > 0 ? `<span style="color:var(--danger)">MARTINGALE MODE</span>` : "NORMAL HUNTING";
+        if (consecutiveLosses > 0) {
+            const targetStr = currentStrategyMode === 'UNDER' ? 'UNDER 6 (Triggers on 2 High Digits >=6)' : 'OVER 3 (Triggers on 2 Low Digits <=3)';
+            document.getElementById('status').innerHTML = `${stateStr} | ${targetStr}`;
+        } else {
+            const targetStr = currentStrategyMode === 'UNDER' ? 'UNDER 8 (Triggers on 8s, 9s)' : 'OVER 1 (Triggers on 0s, 1s)';
+            document.getElementById('status').innerHTML = `${stateStr} | ${targetStr}`;
+        }
+    }
+
+    function evaluatePatternAndSnipe() {
+        const prev = digitHistory[0];
+        const curr = digitHistory[1];
+        
+        let calculatedStake = CONFIG.stake;
+        let shouldTrigger = false;
+        let contractType = "";
+        let selectedBarrier = 0;
+
+        if (consecutiveLosses > 0) {
+            calculatedStake = CONFIG.stake * Math.pow(CONFIG.multi, consecutiveLosses);
+            if (currentStrategyMode === 'UNDER') {
+                if (prev >= 6 && curr >= 6) {
+                    shouldTrigger = true;
+                    contractType = "DIGITUNDER";
+                    selectedBarrier = 6;
+                }
+            } else {
+                if (prev <= 3 && curr <= 3) {
+                    shouldTrigger = true;
+                    contractType = "DIGITOVER";
+                    selectedBarrier = 3;
+                }
+            }
+        } else {
+            if (currentStrategyMode === 'UNDER') {
+                if (prev >= 8 && curr >= 8) {
+                    shouldTrigger = true;
+                    contractType = "DIGITUNDER";
+                    selectedBarrier = 8;
+                }
+            } else {
+                if (prev <= 1 && curr <= 1) {
+                    shouldTrigger = true;
+                    contractType = "DIGITOVER";
+                    selectedBarrier = 1;
+                }
+            }
+        }
+
+        if (shouldTrigger) {
+            executeSnipe(contractType, selectedBarrier, calculatedStake);
+        }
+    }
+
+    function executeSnipe(type, barrier, stake) {
+        isBusy = true;
+
+        ws.send(JSON.stringify({
+            "buy": 1, 
+            "price": parseFloat(stake.toFixed(2)),
+            "parameters": {
+                "amount": parseFloat(stake.toFixed(2)), 
+                "basis": "stake",
+                "contract_type": type, 
+                "currency": "USD",
+                "duration": 1, 
+                "duration_unit": "t",
+                "symbol": MARKETS[mIdx], 
+                "barrier": barrier.toString() // FIXED: Explicitly cast to string to align with strict API schemas
+            }
+        }));
+        ws.send(JSON.stringify({"proposal_open_contract": 1, "subscribe": 1}));
+
+        setTimeout(() => {
+            document.getElementById('stk').innerText = `$${stake.toFixed(2)}`;
+        }, 0);
+    }
+
+    function handleFinish(c) {
+        isBusy = false;
+        const p = (c.status === 'won' ? c.profit : -c.buy_price);
+        
+        subMilestoneProfit += p; 
+        totalProfit += p; 
+        totalTrades++;
+        
+        if (c.status === 'won') {
+            wins++;
+            consecutiveLosses = 0;
+        } else {
+            consecutiveLosses++;
+        }
+
+        // Update tracking grid row data frames immediately
+        try {
+            updateUI(c);
+        } catch (err) {
+            console.error("Table Update Error Logged: ", err);
+        }
+
+        // Dispatch verification dialogue audit popups
+        try {
+            const rawExitSource = c.exit_tick_display_value || c.current_spot_display_value || c.exit_tick || "0";
+            const exitDigit = rawExitSource.toString().slice(-1);
+            const targetLabel = `${c.contract_type.replace("DIGIT","")} ${c.barrier}`;
+            
+            document.getElementById('audit-target').innerText = targetLabel;
+            document.getElementById('audit-exit').innerText = exitDigit;
+            
+            const modalOutcome = document.getElementById('audit-outcome');
+            if (c.status === 'won') {
+                modalOutcome.innerText = "SUCCESS / WON";
+                modalOutcome.style.color = "var(--success)";
+            } else {
+                modalOutcome.innerText = "FAILED / LOST";
+                modalOutcome.style.color = "var(--danger)";
+            }
+            
+            document.getElementById('audit-modal').classList.add('active');
+        } catch(e) {
+            console.error("Audit Modal Error Logged: ", e);
+        }
+
+        // Account risk evaluation boundaries
+        if (totalProfit <= -CONFIG.sl) {
+            stopBot("STOP LOSS BREACHED!", "var(--danger)");
+            return;
+        }
+
+        if (totalProfit >= CONFIG.tp) {
+            stopBot("TARGET TAKE PROFIT MET!", "var(--success)");
+            return;
+        }
+
+        // Milestone transition engine checks
+        if (subMilestoneProfit >= subMilestoneTarget) {
+            triggerMilestoneShift();
+            return;
+        }
+
+        // Standard rotation index tracking parameters
+        if (++trades >= 3) {
+            rotate();
+        }
+    }
+
+    function triggerMilestoneShift() {
+        isCooldown = true;
+        subMilestoneProfit = 0.00; 
+        currentMilestone++;
+        digitHistory = []; // FIXED: Wipes cached ticks to prevent cross-contamination across asset indices
+
+        document.getElementById('status').innerHTML = `<span style="color:var(--success); font-weight:bold;">MILESTONE SECURED! COOLING DOWN...</span>`;
+        
+        if (ws) ws.send(JSON.stringify({ "forget_all": "ticks" }));
+
+        setTimeout(() => {
+            isCooldown = false;
+            trades = 0;
+            currentStrategyMode = (currentStrategyMode === 'OVER') ? 'UNDER' : 'OVER';
+            mIdx = (mIdx + 1) % MARKETS.length;
+            startMarket();
+        }, 5000); 
+    }
+
+    function closeAudit() {
+        document.getElementById('audit-modal').classList.remove('active');
+    }
+
+    function stopBot(message, color) {
+        botStopped = true;
+        if(ws) ws.send(JSON.stringify({ "forget_all": "ticks" }));
+        document.getElementById('status').innerText = message;
+        document.getElementById('status').style.color = color;
+    }
+
+    function updateUI(c) {
+        document.getElementById('ui-total-profit').innerText = `$${totalProfit.toFixed(2)}`;
+        document.getElementById('ui-milestone').innerText = `${Math.min(currentMilestone, MILESTONE_SESSIONS)} / ${MILESTONE_SESSIONS}`;
+        
+        document.getElementById('prog-label').innerText = `MILESTONE ${Math.min(currentMilestone, MILESTONE_SESSIONS)} PROFIT PROGRESS`;
+        document.getElementById('prog-val').innerText = `$${Math.max(subMilestoneProfit, 0).toFixed(2)} / $${subMilestoneTarget.toFixed(2)}`;
+        
+        const percentage = subMilestoneTarget > 0 ? (subMilestoneProfit / subMilestoneTarget) * 100 : 0;
+        document.getElementById('progress-fill').style.width = `${Math.min(Math.max(percentage, 0), 100)}%`;
+        
+        const rawExitSource = c.exit_tick_display_value || c.current_spot_display_value || c.exit_tick || "0";
+        const exit = rawExitSource.toString().slice(-1);
+        const targetLabel = `${c.contract_type.replace("DIGIT","")} ${c.barrier}`;
+        
+        const row = `<tr>
+            <td style="font-family:'Orbitron'; font-weight:bold; color: #fff;">${c.symbol}</td>
+            <td style="color:var(--primary)">${targetLabel}</td>
+            <td style="font-family:'Orbitron'; font-weight:bold;">${exit}</td>
+            <td style="color:${c.status === 'won' ? 'var(--success)' : 'var(--danger)'}; font-weight:bold;">${c.status.toUpperCase()}</td>
+            <td>$${c.buy_price.toFixed(2)}</td>
+        </tr>`;
+        
+        document.getElementById('logs').insertAdjacentHTML('afterbegin', row);
+    }
+
+    function startMarket() {
+        if(botStopped || !ws || MARKETS.length === 0) return;
+        const s = MARKETS[mIdx];
+        document.getElementById('mkt-badge').innerText = `${s} | MODE: ${currentStrategyMode}`;
+        ws.send(JSON.stringify({ "ticks": s, "subscribe": 1 }));
+    }
+
+    function rotate() {
+        if(botStopped || !ws || isCooldown) return;
+        ws.send(JSON.stringify({ "forget_all": "ticks" }));
+        
+        mIdx = (mIdx + 1) % MARKETS.length;
+        trades = 0;
+        digitHistory = []; // FIXED: Wipes cached ticks to prevent cross-contamination across asset indices
+        currentStrategyMode = (currentStrategyMode === 'OVER') ? 'UNDER' : 'OVER';
+        
+        setTimeout(startMarket, 300);
+    }
+</script>
+</body>
+</html>
