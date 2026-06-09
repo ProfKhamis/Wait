@@ -127,9 +127,13 @@
     
     // High-Speed Engine State
     let MARKETS = [], mIdx = 0, trades = 0, consecutiveLosses = 0;
-    let isBusy = false, botStopped = true, isCooldown = false;
+    let botStopped = true, isCooldown = false;
     let ws = null;
     let currentStrategyMode = 'OVER'; 
+
+    // STRICT DETERMINISTIC STATE MACHINE TRACKING
+    let ENGINE_STATE = 'IDLE'; // IDLE | SUBSCRIBING | ACTIVE | TRADING | SWITCHING
+    let subscribedTickSymbol = null; 
 
     // OPTIMIZATION: Replacing array history with simple primitive integers
     let prevTick = -1;
@@ -139,7 +143,6 @@
     let cachedStakeStr = "2.00";
     let activeThreshold = 1;      // The digit to compare against
     let activeBuyPayload = "";    // Pre-stringified JSON buy request
-    const subscribePayload = '{"proposal_open_contract":1,"subscribe":1}'; // Static secondary request
 
     function syncParameters() {
         if(!DOM['param-stake']) return; // Guard for pre-load calls
@@ -208,18 +211,25 @@
         DOM.status.style.color = "var(--primary)";
 
         ws = new WebSocket(`wss://ws.binaryws.com/websockets/v3?app_id=${APP_ID}`);
+        ENGINE_STATE = 'IDLE';
+        subscribedTickSymbol = null;
         
         ws.onopen = () => ws.send(JSON.stringify({ "authorize": token }));
 
         ws.onmessage = (e) => {
             const res = JSON.parse(e.data);
             
+            // 5. CRITICAL ERROR HANDLING PIECE: Rebound cleanly on api transaction issues
             if (res.error) {
                 console.error("Deriv Error: ", res.error.message);
                 DOM.status.innerHTML = `<span style="color:var(--danger)">API ERROR: ${res.error.message}</span>`;
+                
                 if (res.msg_type === 'buy') {
-                    isBusy = false; 
-                    setTimeout(rotate, 1000);
+                    // Safe error state restoration path without breaking data arrays structures
+                    if (ENGINE_STATE === 'TRADING') {
+                        ENGINE_STATE = 'ACTIVE';
+                        requestAnimationFrame(updateStatusUI);
+                    }
                 }
                 return;
             }
@@ -228,6 +238,8 @@
                 botStopped = false; 
                 DOM.status.innerText = "CONNECTED! STRUCTURING ASSETS...";
                 ws.send(JSON.stringify({ "balance": 1, "subscribe": 1 }));
+                // Establish contract results feed subscription stream EXACTLY ONCE per websocket instantiation.
+                ws.send(JSON.stringify({ "proposal_open_contract": 1, "subscribe": 1 }));
                 ws.send(JSON.stringify({ "active_symbols": "brief", "product_type": "basic" }));
             }
             
@@ -244,9 +256,34 @@
                 if(MARKETS.length === 0) MARKETS = ["R_10", "1HZ10V", "R_25", "1HZ25V", "R_50", "1HZ50V", "R_75", "1HZ75V", "R_100", "1HZ100V"];
                 startMarket();
             }
+
+            // 3. PURE WS ACK SYSTEM: Intercept structural tear-down message from API to safely execute rotation
+            if (res.msg_type === 'forget_all') {
+                if (ENGINE_STATE === 'SWITCHING') {
+                    subscribedTickSymbol = null; // Clear asset lock tracking cleanly
+                    
+                    if (!isCooldown) {
+                        mIdx = (mIdx + 1) % MARKETS.length;
+                        trades = 0;
+                        currentStrategyMode = (currentStrategyMode === 'OVER') ? 'UNDER' : 'OVER';
+                    }
+                    startMarket();
+                }
+            }
             
             // --- HIGH FREQUENCY EXECUTION PATH ---
             if (res.tick) {
+                const incomingSymbol = res.tick.symbol;
+
+                // 1. STRICT TICK SUBSCRIPTION ACK HANDSHAKE:
+                if (ENGINE_STATE === 'SUBSCRIBING' && incomingSymbol === subscribedTickSymbol) {
+                    ENGINE_STATE = 'ACTIVE';
+                    requestAnimationFrame(updateStatusUI);
+                }
+
+                // 7. BLOCK DUPLICATE LOGIC RUNTIMES: Discard any frames belonging to old/unwanted tickers
+                if (incomingSymbol !== subscribedTickSymbol) return;
+
                 const rawStr = res.tick.display_value || res.tick.quote.toString();
                 // OPTIMIZATION: Extracting ASCII byte is magnitudes faster than parseInt & slice
                 const digit = rawStr.charCodeAt(rawStr.length - 1) - 48; 
@@ -254,8 +291,8 @@
                 prevTick = currTick;
                 currTick = digit;
                 
-                // Safe evaluation block with zero object allocation
-                if (prevTick !== -1 && !isBusy && !botStopped && !isCooldown) {
+                // 4. TRADE LOCKING PATTERN: Completely bypass trigger scanning evaluations if state machine isn't ACTIVE
+                if (prevTick !== -1 && !botStopped && ENGINE_STATE === 'ACTIVE') {
                     let triggered = false;
                     
                     if (currentStrategyMode === 'UNDER') {
@@ -265,10 +302,8 @@
                     }
 
                     if (triggered) {
-                        isBusy = true;
-                        // Execute instantly using cached memory strings
+                        ENGINE_STATE = 'TRADING'; // Atomic Lock down mechanism applied instantly
                         ws.send(activeBuyPayload);
-                        ws.send(subscribePayload);
                         
                         // Defer non-critical UI updates
                         requestAnimationFrame(() => {
@@ -285,19 +320,32 @@
                 });
             }
             
-            if (res.msg_type === 'proposal_open_contract' && res.proposal_open_contract.is_sold) {
-                handleFinish(res.proposal_open_contract);
+            // 4. TRANSACTION ENGINE VALIDATION MECHANISMS: Ensure states are synchronized safely
+            if (res.msg_type === 'proposal_open_contract' && res.proposal_open_contract) {
+                const contract = res.proposal_open_contract;
+                if (contract.is_sold && ENGINE_STATE === 'TRADING') {
+                    handleFinish(contract);
+                }
             }
         };
 
         ws.onerror = () => {
             DOM.status.innerText = "CONNECTION FAILURE";
             DOM.status.style.color = "var(--danger)";
+            ENGINE_STATE = 'IDLE';
         };
     }
 
     function updateStatusUI() {
         if (botStopped) return;
+        if (ENGINE_STATE === 'SWITCHING') {
+            DOM.status.innerHTML = `<span style="color:var(--accent)">UNSUBSCRIBING STREAM...</span>`;
+            return;
+        }
+        if (ENGINE_STATE === 'SUBSCRIBING') {
+            DOM.status.innerHTML = `<span style="color:var(--primary)">WAITING FOR ENGINE ACK...</span>`;
+            return;
+        }
         if (isCooldown) {
             DOM.status.innerHTML = `<span style="color:var(--primary); font-weight:bold;">COOLDOWN PAUSE... ROTATING ASSETS</span>`;
             return;
@@ -308,7 +356,6 @@
     }
 
     function handleFinish(c) {
-        isBusy = false;
         const p = (c.status === 'won' ? c.profit : -c.buy_price);
         
         subMilestoneProfit += p; 
@@ -338,7 +385,8 @@
         if (trades >= 3) {
             rotate();
         } else {
-            precompileExecutionEngine(); // Recalculate parameters for the next potential trade
+            ENGINE_STATE = 'ACTIVE'; // Release structural execution locks
+            precompileExecutionEngine(); 
         }
     }
 
@@ -360,6 +408,7 @@
         DOM['audit-modal'].classList.add('active');
     }
 
+    // 6. UI TIMEOUT MANAGEMENT: setTimeout isolated purely to provide visual cooldown pacing
     function triggerMilestoneShift() {
         isCooldown = true;
         subMilestoneProfit = 0.00; 
@@ -367,14 +416,21 @@
         resetTickMemory();
 
         DOM.status.innerHTML = `<span style="color:var(--success); font-weight:bold;">MILESTONE SECURED! COOLING DOWN...</span>`;
-        if (ws) ws.send(JSON.stringify({ "forget_all": "ticks" }));
+        
+        if (ws) {
+            ENGINE_STATE = 'SWITCHING';
+            ws.send(JSON.stringify({ "forget_all": "ticks" }));
+        }
 
         setTimeout(() => {
             isCooldown = false;
-            trades = 0;
-            currentStrategyMode = (currentStrategyMode === 'OVER') ? 'UNDER' : 'OVER';
-            mIdx = (mIdx + 1) % MARKETS.length;
-            startMarket();
+            // If the server handshake ACK arrived earlier during this delay window, fire execution entry
+            if (ENGINE_STATE === 'ACTIVE' || ENGINE_STATE === 'IDLE') {
+                mIdx = (mIdx + 1) % MARKETS.length;
+                trades = 0;
+                currentStrategyMode = (currentStrategyMode === 'OVER') ? 'UNDER' : 'OVER';
+                startMarket();
+            }
         }, 5000); 
     }
 
@@ -382,7 +438,11 @@
 
     function stopBot(message, color) {
         botStopped = true;
-        if(ws) ws.send(JSON.stringify({ "forget_all": "ticks" }));
+        ENGINE_STATE = 'IDLE';
+        if(ws) {
+            ws.send(JSON.stringify({ "forget_all": "ticks" }));
+            subscribedTickSymbol = null;
+        }
         DOM.status.innerText = message;
         DOM.status.style.color = color;
     }
@@ -418,21 +478,27 @@
 
     function startMarket() {
         if(botStopped || !ws || MARKETS.length === 0) return;
+        
+        const targetSymbol = MARKETS[mIdx];
+        
+        // 2. ONE ACTIVE STREAM SYSTEM: Block subscription requests if engine is already locked on target
+        if (subscribedTickSymbol === targetSymbol && ENGINE_STATE === 'ACTIVE') return;
+        
+        ENGINE_STATE = 'SUBSCRIBING'; // Put state in holding pattern awaiting first tick verification response
         resetTickMemory();
         precompileExecutionEngine();
-        DOM['mkt-badge'].innerText = `${MARKETS[mIdx]} | MODE: ${currentStrategyMode}`;
-        ws.send(JSON.stringify({ "ticks": MARKETS[mIdx], "subscribe": 1 }));
+        
+        DOM['mkt-badge'].innerText = `${targetSymbol} | MODE: ${currentStrategyMode}`;
+        
+        ws.send(JSON.stringify({ "ticks": targetSymbol, "subscribe": 1 }));
+        subscribedTickSymbol = targetSymbol; 
     }
 
     function rotate() {
-        if(botStopped || !ws || isCooldown) return;
+        if(botStopped || !ws || ENGINE_STATE === 'SWITCHING') return;
+        
+        ENGINE_STATE = 'SWITCHING'; // Block duplicate rotation triggers natively
         ws.send(JSON.stringify({ "forget_all": "ticks" }));
-        
-        mIdx = (mIdx + 1) % MARKETS.length;
-        trades = 0;
-        currentStrategyMode = (currentStrategyMode === 'OVER') ? 'UNDER' : 'OVER';
-        
-        setTimeout(startMarket, 300);
     }
 </script>
 </body>
