@@ -109,7 +109,6 @@
 </div>
 
 <script>
-    // OPTIMIZATION: Cache DOM elements globally to prevent mid-tick document traversing.
     const DOM = {};
     window.addEventListener('DOMContentLoaded', () => {
         ['api-token', 'status', 'mkt-badge', 'digit', 'prog-label', 'prog-val', 'progress-fill', 
@@ -121,40 +120,34 @@
     const APP_ID = 126967;
     let CONFIG = { stake: 2.00, multi: 2.0, tp: 10.00, sl: 15.00 };
     
-    // Core Logic State
     const MILESTONE_SESSIONS = 4; 
     let currentMilestone = 1, subMilestoneTarget = 0.00, subMilestoneProfit = 0.00, totalProfit = 0.00;
     
-    // High-Speed Engine State
     let MARKETS = [], mIdx = 0, trades = 0, consecutiveLosses = 0;
     let botStopped = true, isCooldown = false;
     let ws = null;
     let currentStrategyMode = 'OVER'; 
 
-    // STRICT DETERMINISTIC STATE MACHINE TRACKING
-    let ENGINE_STATE = 'IDLE'; // IDLE | SUBSCRIBING | ACTIVE | TRADING | SWITCHING
+    let ENGINE_STATE = 'IDLE'; 
     let subscribedTickSymbol = null; 
 
-    // OPTIMIZATION: Replacing array history with simple primitive integers
     let prevTick = -1;
     let currTick = -1;
 
-    // OPTIMIZATION: Pre-compiled execution payloads
     let cachedStakeStr = "2.00";
-    let activeThreshold = 1;      // The digit to compare against
-    let activeBuyPayload = "";    // Pre-stringified JSON buy request
+    let activeThreshold = 1;      
+    let activeBuyPayload = "";    
 
     function syncParameters() {
-        if(!DOM['param-stake']) return; // Guard for pre-load calls
+        if(!DOM['param-stake']) return; 
         CONFIG.stake = parseFloat(DOM['param-stake'].value) || 2.00;
         CONFIG.multi = parseFloat(DOM['param-multi'].value) || 2.0;
         CONFIG.tp = parseFloat(DOM['param-tp'].value) || 10.00;
         CONFIG.sl = parseFloat(DOM['param-sl'].value) || 15.00;
         subMilestoneTarget = CONFIG.tp / MILESTONE_SESSIONS;
-        precompileExecutionEngine(); // Re-compile payload if user changes settings
+        precompileExecutionEngine(); 
     }
 
-    // OPTIMIZATION: Moves all heavy math, string creation, and JSON serialization out of the tick loop.
     function precompileExecutionEngine() {
         if (botStopped || MARKETS.length === 0) return;
 
@@ -163,7 +156,8 @@
         
         if (consecutiveLosses > 0) {
             calculatedStake = CONFIG.stake * Math.pow(CONFIG.multi, consecutiveLosses);
-            activeThreshold = (currentStrategyMode === 'UNDER') ? 6 : 3;
+            // STRATEGY UPDATE: Changed recovery barrier from UNDER 6 to UNDER 7 for high matching digit pairs
+            activeThreshold = (currentStrategyMode === 'UNDER') ? 7 : 3;
             contractType = (currentStrategyMode === 'UNDER') ? "DIGITUNDER" : "DIGITOVER";
         } else {
             activeThreshold = (currentStrategyMode === 'UNDER') ? 8 : 1;
@@ -173,7 +167,6 @@
         cachedStakeStr = calculatedStake.toFixed(2);
         const floatStake = parseFloat(cachedStakeStr);
 
-        // Pre-build the exact string required by Deriv API
         const buyObj = {
             "buy": 1, 
             "price": floatStake,
@@ -190,7 +183,6 @@
         };
         activeBuyPayload = JSON.stringify(buyObj);
         
-        // Push status UI update outside the tick loop
         requestAnimationFrame(updateStatusUI);
     }
 
@@ -219,13 +211,11 @@
         ws.onmessage = (e) => {
             const res = JSON.parse(e.data);
             
-            // 5. CRITICAL ERROR HANDLING PIECE: Rebound cleanly on api transaction issues
             if (res.error) {
                 console.error("Deriv Error: ", res.error.message);
                 DOM.status.innerHTML = `<span style="color:var(--danger)">API ERROR: ${res.error.message}</span>`;
                 
                 if (res.msg_type === 'buy') {
-                    // Safe error state restoration path without breaking data arrays structures
                     if (ENGINE_STATE === 'TRADING') {
                         ENGINE_STATE = 'ACTIVE';
                         requestAnimationFrame(updateStatusUI);
@@ -238,7 +228,6 @@
                 botStopped = false; 
                 DOM.status.innerText = "CONNECTED! STRUCTURING ASSETS...";
                 ws.send(JSON.stringify({ "balance": 1, "subscribe": 1 }));
-                // Establish contract results feed subscription stream EXACTLY ONCE per websocket instantiation.
                 ws.send(JSON.stringify({ "proposal_open_contract": 1, "subscribe": 1 }));
                 ws.send(JSON.stringify({ "active_symbols": "brief", "product_type": "basic" }));
             }
@@ -257,10 +246,9 @@
                 startMarket();
             }
 
-            // 3. PURE WS ACK SYSTEM: Intercept structural tear-down message from API to safely execute rotation
             if (res.msg_type === 'forget_all') {
                 if (ENGINE_STATE === 'SWITCHING') {
-                    subscribedTickSymbol = null; // Clear asset lock tracking cleanly
+                    subscribedTickSymbol = null; 
                     
                     if (!isCooldown) {
                         mIdx = (mIdx + 1) % MARKETS.length;
@@ -271,27 +259,22 @@
                 }
             }
             
-            // --- HIGH FREQUENCY EXECUTION PATH ---
             if (res.tick) {
                 const incomingSymbol = res.tick.symbol;
 
-                // 1. STRICT TICK SUBSCRIPTION ACK HANDSHAKE:
                 if (ENGINE_STATE === 'SUBSCRIBING' && incomingSymbol === subscribedTickSymbol) {
                     ENGINE_STATE = 'ACTIVE';
                     requestAnimationFrame(updateStatusUI);
                 }
 
-                // 7. BLOCK DUPLICATE LOGIC RUNTIMES: Discard any frames belonging to old/unwanted tickers
                 if (incomingSymbol !== subscribedTickSymbol) return;
 
                 const rawStr = res.tick.display_value || res.tick.quote.toString();
-                // OPTIMIZATION: Extracting ASCII byte is magnitudes faster than parseInt & slice
                 const digit = rawStr.charCodeAt(rawStr.length - 1) - 48; 
                 
                 prevTick = currTick;
                 currTick = digit;
                 
-                // 4. TRADE LOCKING PATTERN: Completely bypass trigger scanning evaluations if state machine isn't ACTIVE
                 if (prevTick !== -1 && !botStopped && ENGINE_STATE === 'ACTIVE') {
                     let triggered = false;
                     
@@ -302,25 +285,22 @@
                     }
 
                     if (triggered) {
-                        ENGINE_STATE = 'TRADING'; // Atomic Lock down mechanism applied instantly
+                        ENGINE_STATE = 'TRADING'; 
                         ws.send(activeBuyPayload);
                         
-                        // Defer non-critical UI updates
                         requestAnimationFrame(() => {
                             DOM.stk.innerText = `$${cachedStakeStr}`;
                             DOM.digit.innerText = currTick;
                         });
-                        return; // Exit function immediately
+                        return; 
                     }
                 }
                 
-                // Only update digit if we didn't buy
                 requestAnimationFrame(() => {
                     DOM.digit.innerText = currTick;
                 });
             }
             
-            // 4. TRANSACTION ENGINE VALIDATION MECHANISMS: Ensure states are synchronized safely
             if (res.msg_type === 'proposal_open_contract' && res.proposal_open_contract) {
                 const contract = res.proposal_open_contract;
                 if (contract.is_sold && ENGINE_STATE === 'TRADING') {
@@ -368,7 +348,6 @@
             consecutiveLosses++;
         }
 
-        // Defer rendering to prevent blocking the socket thread
         requestAnimationFrame(() => {
             updateUI(c);
             dispatchAuditModal(c);
@@ -385,7 +364,7 @@
         if (trades >= 3) {
             rotate();
         } else {
-            ENGINE_STATE = 'ACTIVE'; // Release structural execution locks
+            ENGINE_STATE = 'ACTIVE'; 
             precompileExecutionEngine(); 
         }
     }
@@ -408,7 +387,6 @@
         DOM['audit-modal'].classList.add('active');
     }
 
-    // 6. UI TIMEOUT MANAGEMENT: setTimeout isolated purely to provide visual cooldown pacing
     function triggerMilestoneShift() {
         isCooldown = true;
         subMilestoneProfit = 0.00; 
@@ -424,7 +402,6 @@
 
         setTimeout(() => {
             isCooldown = false;
-            // If the server handshake ACK arrived earlier during this delay window, fire execution entry
             if (ENGINE_STATE === 'ACTIVE' || ENGINE_STATE === 'IDLE') {
                 mIdx = (mIdx + 1) % MARKETS.length;
                 trades = 0;
@@ -480,11 +457,9 @@
         if(botStopped || !ws || MARKETS.length === 0) return;
         
         const targetSymbol = MARKETS[mIdx];
-        
-        // 2. ONE ACTIVE STREAM SYSTEM: Block subscription requests if engine is already locked on target
         if (subscribedTickSymbol === targetSymbol && ENGINE_STATE === 'ACTIVE') return;
         
-        ENGINE_STATE = 'SUBSCRIBING'; // Put state in holding pattern awaiting first tick verification response
+        ENGINE_STATE = 'SUBSCRIBING'; 
         resetTickMemory();
         precompileExecutionEngine();
         
@@ -497,7 +472,7 @@
     function rotate() {
         if(botStopped || !ws || ENGINE_STATE === 'SWITCHING') return;
         
-        ENGINE_STATE = 'SWITCHING'; // Block duplicate rotation triggers natively
+        ENGINE_STATE = 'SWITCHING'; 
         ws.send(JSON.stringify({ "forget_all": "ticks" }));
     }
 </script>
