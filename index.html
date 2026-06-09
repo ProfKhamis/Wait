@@ -1,3 +1,5 @@
+Mine
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -130,7 +132,6 @@
     let isBusy = false, botStopped = true, isCooldown = false;
     let ws = null;
     let currentStrategyMode = 'OVER'; 
-    let currentContractSubId = null; // High-performance tracking memory allocation token
 
     // OPTIMIZATION: Replacing array history with simple primitive integers
     let prevTick = -1;
@@ -140,6 +141,7 @@
     let cachedStakeStr = "2.00";
     let activeThreshold = 1;      // The digit to compare against
     let activeBuyPayload = "";    // Pre-stringified JSON buy request
+    const subscribePayload = '{"proposal_open_contract":1,"subscribe":1}'; // Static secondary request
 
     function syncParameters() {
         if(!DOM['param-stake']) return; // Guard for pre-load calls
@@ -217,9 +219,9 @@
             if (res.error) {
                 console.error("Deriv Error: ", res.error.message);
                 DOM.status.innerHTML = `<span style="color:var(--danger)">API ERROR: ${res.error.message}</span>`;
-                if (res.msg_type === 'buy' || res.msg_type === 'proposal_open_contract') {
+                if (res.msg_type === 'buy') {
                     isBusy = false; 
-                    if (res.msg_type === 'buy') setTimeout(rotate, 1000);
+                    setTimeout(rotate, 1000);
                 }
                 return;
             }
@@ -243,20 +245,6 @@
                 MARKETS = symbols.map(s => s.symbol).sort();
                 if(MARKETS.length === 0) MARKETS = ["R_10", "1HZ10V", "R_25", "1HZ25V", "R_50", "1HZ50V", "R_75", "1HZ75V", "R_100", "1HZ100V"];
                 startMarket();
-            }
-
-            // Target subscription triggered only upon successful transaction confirmation response
-            if (res.msg_type === 'buy' && res.buy) {
-                ws.send(JSON.stringify({
-                    "proposal_open_contract": 1,
-                    "contract_id": res.buy.contract_id,
-                    "subscribe": 1
-                }));
-            }
-
-            // Capture exact streaming transaction token map reference context
-            if (res.msg_type === 'proposal_open_contract' && res.subscription) {
-                currentContractSubId = res.subscription.id;
             }
             
             // --- HIGH FREQUENCY EXECUTION PATH ---
@@ -282,6 +270,7 @@
                         isBusy = true;
                         // Execute instantly using cached memory strings
                         ws.send(activeBuyPayload);
+                        ws.send(subscribePayload);
                         
                         // Defer non-critical UI updates
                         requestAnimationFrame(() => {
@@ -322,13 +311,6 @@
 
     function handleFinish(c) {
         isBusy = false;
-
-        // Instantly forget and clear tracking subscription context reference
-        if (currentContractSubId) {
-            ws.send(JSON.stringify({ "forget": currentContractSubId }));
-            currentContractSubId = null;
-        }
-        
         const p = (c.status === 'won' ? c.profit : -c.buy_price);
         
         subMilestoneProfit += p; 
