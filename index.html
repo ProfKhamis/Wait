@@ -108,13 +108,16 @@
 </div>
 
 <script>
-    // Global Element DOM Map Cache
+    // Static DOM references Cache
     const DOM = {};
     window.addEventListener('DOMContentLoaded', () => {
         ['api-token', 'status', 'mkt-badge', 'digit', 'prog-label', 'prog-val', 'progress-fill', 
          'ui-milestone', 'ui-total-profit', 'bal', 'stk', 'param-stake', 'param-multi', 
          'param-tp', 'param-sl', 'logs', 'audit-modal', 'audit-target', 'audit-exit', 'audit-outcome']
         .forEach(id => DOM[id] = document.getElementById(id));
+        
+        // Start the continuous rendering animation tracking thread
+        requestAnimationFrame(renderLoop);
     });
 
     const APP_ID = 126967;
@@ -131,16 +134,34 @@
     let ENGINE_STATE = 'IDLE'; 
     let subscribedTickSymbol = null; 
 
-    // PURE MEMORY ALIGNED PRIMITIVES FOR HIGH PERFORMANCE TICK EVALUATION
+    // PURE EXECUTION VARIABLES (Hot-path mathematical registers)
     let prevTick = -1;
     let currTick = -1;
-
     let cachedStakeStr = "2.00";
     let activeThreshold = 1;      
     let activeBuyPayload = "";    
 
+    // =========================================================================
+    // HIGH-SPEED SHARED MEMORY STATE BUFFER (Isolates Strategy from DOM)
+    // =========================================================================
+    const UI_BUFFER = {
+        digit: "--",
+        statusText: "ENTER API TOKEN ABOVE TO BEGIN",
+        statusColor: "#8b949e",
+        marketBadge: "DISCONNECTED",
+        balance: "$0.00",
+        currentStake: "$2.00",
+        totalProfit: "$0.00",
+        milestoneText: "1 / 4",
+        progressLabel: "SESSION MILESTONE PROGRESS",
+        progressVal: "$0.00 / $2.50",
+        progressWidth: 0,
+        pendingLogs: [],       // Atomic injection arrays
+        pendingAudit: null,    // Modal frame cache objects
+        shouldUpdateStatus: true
+    };
+
     function syncParameters() {
-        if(!DOM['param-stake']) return; 
         CONFIG.stake = parseFloat(DOM['param-stake'].value) || 2.00;
         CONFIG.multi = parseFloat(DOM['param-multi'].value) || 2.0;
         CONFIG.tp = parseFloat(DOM['param-tp'].value) || 10.00;
@@ -167,7 +188,7 @@
         cachedStakeStr = calculatedStake.toFixed(2);
         const floatStake = parseFloat(cachedStakeStr);
 
-        const buyObj = {
+        activeBuyPayload = JSON.stringify({
             "buy": 1, 
             "price": floatStake,
             "parameters": {
@@ -180,10 +201,9 @@
                 "symbol": MARKETS[mIdx], 
                 "barrier": activeThreshold.toString()
             }
-        };
-        activeBuyPayload = JSON.stringify(buyObj);
+        });
         
-        requestAnimationFrame(updateStatusUI);
+        UI_BUFFER.shouldUpdateStatus = true;
     }
 
     window.addEventListener('load', () => {
@@ -199,8 +219,8 @@
         localStorage.setItem('deriv_api_token', token);
         if (ws) ws.close();
 
-        DOM.status.innerText = "CONNECTING TO WEBSOCKET...";
-        DOM.status.style.color = "var(--primary)";
+        UI_BUFFER.statusText = "CONNECTING TO WEBSOCKET...";
+        UI_BUFFER.statusColor = "var(--primary)";
 
         ws = new WebSocket('wss://ws.binaryws.com/websockets/v3?app_id=' + APP_ID);
         ENGINE_STATE = 'IDLE';
@@ -213,27 +233,27 @@
             
             if (res.error) {
                 console.error("Deriv Error: ", res.error.message);
-                DOM.status.innerHTML = `<span style="color:var(--danger)">API ERROR: ${res.error.message}</span>`;
+                UI_BUFFER.statusText = `API ERROR: ${res.error.message}`;
+                UI_BUFFER.statusColor = "var(--danger)";
                 
-                if (res.msg_type === 'buy') {
-                    if (ENGINE_STATE === 'TRADING') {
-                        ENGINE_STATE = 'ACTIVE';
-                        requestAnimationFrame(updateStatusUI);
-                    }
+                if (res.msg_type === 'buy' && ENGINE_STATE === 'TRADING') {
+                    ENGINE_STATE = 'ACTIVE';
+                    UI_BUFFER.shouldUpdateStatus = true;
                 }
                 return;
             }
             
             if (res.msg_type === 'authorize') {
                 botStopped = false; 
-                DOM.status.innerText = "CONNECTED! STRUCTURING ASSETS...";
+                UI_BUFFER.statusText = "CONNECTED! STRUCTURING ASSETS...";
+                UI_BUFFER.statusColor = "var(--primary)";
                 ws.send(JSON.stringify({ "balance": 1, "subscribe": 1 }));
                 ws.send(JSON.stringify({ "proposal_open_contract": 1, "subscribe": 1 }));
                 ws.send(JSON.stringify({ "active_symbols": "brief", "product_type": "basic" }));
             }
             
             if (res.msg_type === 'balance') {
-                DOM.bal.innerText = `$${res.balance.balance.toFixed(2)}`;
+                UI_BUFFER.balance = `$${res.balance.balance.toFixed(2)}`;
             }
 
             if (res.msg_type === 'active_symbols') {
@@ -249,7 +269,6 @@
             if (res.msg_type === 'forget_all') {
                 if (ENGINE_STATE === 'SWITCHING') {
                     subscribedTickSymbol = null; 
-                    
                     if (!isCooldown) {
                         mIdx = (mIdx + 1) % MARKETS.length;
                         trades = 0;
@@ -260,57 +279,42 @@
             }
             
             // =========================================================================
-            // LAYER 1: MATHEMATICAL TICK INGESTION (EXCLUSIVELY RAW FLOATS, NO STRINGS)
+            // LAYER 1 & 2: INSTANT EVALUATION & NETWORK EXECUTION PATH (ZERO DOM ENGINE)
             // =========================================================================
             if (res.tick) {
-                const incomingSymbol = res.tick.symbol;
-
-                if (ENGINE_STATE === 'SUBSCRIBING' && incomingSymbol === subscribedTickSymbol) {
+                if (ENGINE_STATE === 'SUBSCRIBING' && res.tick.symbol === subscribedTickSymbol) {
                     ENGINE_STATE = 'ACTIVE';
-                    requestAnimationFrame(updateStatusUI);
+                    UI_BUFFER.shouldUpdateStatus = true;
                 }
 
-                if (incomingSymbol !== subscribedTickSymbol) return;
+                if (res.tick.symbol !== subscribedTickSymbol) return;
 
-                // FIX: Derived completely via O(1) float mathematics from res.tick.quote
-                const digit = Math.floor(res.tick.quote) % 10;
-                
-                prevTick = currTick;
-                currTick = digit;
-                
-                // =========================================================================
-                // LAYER 2: SYNCHRONOUS STRATEGY EVALUATION (ZERO DOM ACCESS / DECOUPLED)
-                // =========================================================================
+                // 1. Math-based digit processing (Fast integer extraction from memory)
+                currTick = Math.floor(res.tick.quote) % 10;
+                UI_BUFFER.digit = currTick; // Push output value immediately to state buffer
+
+                // 2. Direct Strategy Conditions evaluation (Synchronous Stack Execution)
                 if (prevTick !== -1 && !botStopped && ENGINE_STATE === 'ACTIVE') {
-                    let triggered = false;
-                    
                     if (currentStrategyMode === 'UNDER') {
-                        if (prevTick >= activeThreshold && currTick >= activeThreshold) triggered = true;
+                        if (prevTick >= activeThreshold && currTick >= activeThreshold) {
+                            ENGINE_STATE = 'TRADING';
+                            ws.send(activeBuyPayload); // FAST NETWORK DISPATCH
+                            UI_BUFFER.currentStake = `$${cachedStakeStr}`;
+                            prevTick = currTick;
+                            return; // RETURN IMMEDIATE
+                        }
                     } else {
-                        if (prevTick <= activeThreshold && currTick <= activeThreshold) triggered = true;
-                    }
-
-                    if (triggered) {
-                        ENGINE_STATE = 'TRADING'; 
-                        
-                        // INSTANT NETWORK DISPATCH: Zero delay execution over socket layer
-                        ws.send(activeBuyPayload);
-                        
-                        // LAYER 3: ASYNCHRONOUS DEFERRED GRAPHICS RENDERING
-                        const capturedDigit = currTick;
-                        requestAnimationFrame(() => {
-                            DOM.stk.innerText = `$${cachedStakeStr}`;
-                            DOM.digit.innerText = capturedDigit;
-                        });
-                        return; 
+                        if (prevTick <= activeThreshold && currTick <= activeThreshold) {
+                            ENGINE_STATE = 'TRADING';
+                            ws.send(activeBuyPayload); // FAST NETWORK DISPATCH
+                            UI_BUFFER.currentStake = `$${cachedStakeStr}`;
+                            prevTick = currTick;
+                            return; // RETURN IMMEDIATE
+                        }
                     }
                 }
-                
-                // LAYER 3: DEFERRED EYE-CANDY UPDATES FOR NON-TRIGGER PACKETS
-                const capturedDigit = currTick;
-                requestAnimationFrame(() => {
-                    DOM.digit.innerText = capturedDigit;
-                });
+                prevTick = currTick;
+                return;
             }
             
             if (res.msg_type === 'proposal_open_contract' && res.proposal_open_contract) {
@@ -322,29 +326,77 @@
         };
 
         ws.onerror = () => {
-            DOM.status.innerText = "CONNECTION FAILURE";
-            DOM.status.style.color = "var(--danger)";
+            UI_BUFFER.statusText = "CONNECTION FAILURE";
+            UI_BUFFER.statusColor = "var(--danger)";
             ENGINE_STATE = 'IDLE';
         };
     }
 
-    function updateStatusUI() {
+    // =========================================================================
+    // LAYER 3: ASYNCHRONOUS THROTTLED UI RENDERING LOOP (60 FPS DECOUPLED PAINT)
+    // =========================================================================
+    function renderLoop() {
+        if (DOM.digit) {
+            // Apply updates only if modifications exist inside state variables
+            if (DOM.digit.innerText !== String(UI_BUFFER.digit)) {
+                DOM.digit.innerText = UI_BUFFER.digit;
+            }
+            
+            if (UI_BUFFER.shouldUpdateStatus) {
+                computeStatusUIString();
+                UI_BUFFER.shouldUpdateStatus = false;
+            }
+            
+            DOM.status.innerText = UI_BUFFER.statusText;
+            DOM.status.style.color = UI_BUFFER.statusColor;
+            DOM['mkt-badge'].innerText = UI_BUFFER.marketBadge;
+            DOM.bal.innerText = UI_BUFFER.balance;
+            DOM.stk.innerText = UI_BUFFER.currentStake;
+            DOM['ui-total-profit'].innerText = UI_BUFFER.totalProfit;
+            DOM['ui-milestone'].innerText = UI_BUFFER.milestoneText;
+            DOM['prog-label'].innerText = UI_BUFFER.progressLabel;
+            DOM['prog-val'].innerText = UI_BUFFER.progressVal;
+            DOM['progress-fill'].style.width = UI_BUFFER.progressWidth;
+
+            // Shift and append table records sequentially from the buffer array
+            while (UI_BUFFER.pendingLogs.length > 0) {
+                DOM.logs.insertAdjacentHTML('afterbegin', UI_BUFFER.pendingLogs.shift());
+            }
+
+            // Fire modal window updates safely away from execution handlers
+            if (UI_BUFFER.pendingAudit) {
+                const audit = UI_BUFFER.pendingAudit;
+                DOM['audit-target'].innerText = audit.target;
+                DOM['audit-exit'].innerText = audit.exit;
+                DOM['audit-outcome'].innerText = audit.outcome;
+                DOM['audit-outcome'].style.color = audit.color;
+                DOM['audit-modal'].classList.add('active');
+                UI_BUFFER.pendingAudit = null;
+            }
+        }
+        requestAnimationFrame(renderLoop);
+    }
+
+    function computeStatusUIString() {
         if (botStopped) return;
         if (ENGINE_STATE === 'SWITCHING') {
-            DOM.status.innerHTML = `<span style="color:var(--accent)">UNSUBSCRIBING STREAM...</span>`;
+            UI_BUFFER.statusText = "UNSUBSCRIBING STREAM...";
+            UI_BUFFER.statusColor = "var(--accent)";
             return;
         }
         if (ENGINE_STATE === 'SUBSCRIBING') {
-            DOM.status.innerHTML = `<span style="color:var(--primary)">WAITING FOR ENGINE ACK...</span>`;
+            UI_BUFFER.statusText = "WAITING FOR ENGINE ACK...";
+            UI_BUFFER.statusColor = "var(--primary)";
             return;
         }
         if (isCooldown) {
-            DOM.status.innerHTML = `<span style="color:var(--primary); font-weight:bold;">COOLDOWN PAUSE... ROTATING ASSETS</span>`;
+            UI_BUFFER.statusText = "COOLDOWN PAUSE... ROTATING ASSETS";
+            UI_BUFFER.statusColor = "var(--primary)";
             return;
         }
-        const stateStr = consecutiveLosses > 0 ? `<span style="color:var(--danger)">MARTINGALE MODE</span>` : "NORMAL HUNTING";
-        const opStr = (currentStrategyMode === 'UNDER') ? 'UNDER' : 'OVER';
-        DOM.status.innerHTML = `${stateStr} | ${opStr} ${activeThreshold}`;
+        const stateStr = consecutiveLosses > 0 ? "MARTINGALE MODE" : "NORMAL HUNTING";
+        UI_BUFFER.statusText = `${stateStr} | ${currentStrategyMode} ${activeThreshold}`;
+        UI_BUFFER.statusColor = consecutiveLosses > 0 ? "var(--danger)" : "var(--primary)";
     }
 
     function handleFinish(c) {
@@ -353,17 +405,35 @@
         subMilestoneProfit += p; 
         totalProfit += p; 
         trades++;
-        
-        if (c.status === 'won') {
-            consecutiveLosses = 0;
-        } else {
-            consecutiveLosses++;
-        }
+        consecutiveLosses = (c.status === 'won') ? 0 : (consecutiveLosses + 1);
 
-        requestAnimationFrame(() => {
-            updateUI(c);
-            dispatchAuditModal(c);
-        });
+        // Frame rendering calculations staged directly onto the asynchronous buffer
+        UI_BUFFER.totalProfit = `$${totalProfit.toFixed(2)}`;
+        UI_BUFFER.milestoneText = `${Math.min(currentMilestone, MILESTONE_SESSIONS)} / ${MILESTONE_SESSIONS}`;
+        UI_BUFFER.progressLabel = `MILESTONE ${Math.min(currentMilestone, MILESTONE_SESSIONS)} PROFIT PROGRESS`;
+        UI_BUFFER.progressVal = `$${Math.max(subMilestoneProfit, 0).toFixed(2)} / $${subMilestoneTarget.toFixed(2)}`;
+        
+        const percentage = subMilestoneTarget > 0 ? (subMilestoneProfit / subMilestoneTarget) * 100 : 0;
+        UI_BUFFER.progressWidth = `${Math.min(Math.max(percentage, 0), 100)}%`;
+        
+        const rawExitSource = c.exit_tick_display_value || c.current_spot_display_value || c.exit_tick || 0;
+        const exitDigit = Math.floor(Number(rawExitSource)) % 10;
+        const targetLabel = `${c.contract_type.replace("DIGIT","")} ${c.barrier}`;
+        
+        UI_BUFFER.pendingLogs.push(`<tr>
+            <td style="font-family:'Orbitron'; font-weight:bold; color: #fff;">${c.symbol}</td>
+            <td style="color:var(--primary)">${targetLabel}</td>
+            <td style="font-family:'Orbitron'; font-weight:bold;">${exitDigit}</td>
+            <td style="color:${c.status === 'won' ? 'var(--success)' : 'var(--danger)'}; font-weight:bold;">${c.status.toUpperCase()}</td>
+            <td>$${c.buy_price.toFixed(2)}</td>
+        </tr>`);
+
+        UI_BUFFER.pendingAudit = {
+            target: targetLabel,
+            exit: exitDigit,
+            outcome: c.status === 'won' ? "SUCCESS / WON" : "FAILED / LOST",
+            color: c.status === 'won' ? "var(--success)" : "var(--danger)"
+        };
 
         if (totalProfit <= -CONFIG.sl) return stopBot("STOP LOSS BREACHED!", "var(--danger)");
         if (totalProfit >= CONFIG.tp) return stopBot("TARGET TAKE PROFIT MET!", "var(--success)");
@@ -381,31 +451,14 @@
         }
     }
 
-    function dispatchAuditModal(c) {
-        const rawExitSource = c.exit_tick_display_value || c.current_spot_display_value || c.exit_tick || 0;
-        const exitDigit = Math.floor(Number(rawExitSource)) % 10;
-        const targetLabel = `${c.contract_type.replace("DIGIT","")} ${c.barrier}`;
-        
-        DOM['audit-target'].innerText = targetLabel;
-        DOM['audit-exit'].innerText = exitDigit;
-        
-        if (c.status === 'won') {
-            DOM['audit-outcome'].innerText = "SUCCESS / WON";
-            DOM['audit-outcome'].style.color = "var(--success)";
-        } else {
-            DOM['audit-outcome'].innerText = "FAILED / LOST";
-            DOM['audit-outcome'].style.color = "var(--danger)";
-        }
-        DOM['audit-modal'].classList.add('active');
-    }
-
     function triggerMilestoneShift() {
         isCooldown = true;
         subMilestoneProfit = 0.00; 
         currentMilestone++;
         resetTickMemory();
 
-        DOM.status.innerHTML = `<span style="color:var(--success); font-weight:bold;">MILESTONE SECURED! COOLING DOWN...</span>`;
+        UI_BUFFER.statusText = "MILESTONE SECURED! COOLING DOWN...";
+        UI_BUFFER.statusColor = "var(--success)";
         
         if (ws) {
             ENGINE_STATE = 'SWITCHING';
@@ -432,32 +485,8 @@
             ws.send(JSON.stringify({ "forget_all": "ticks" }));
             subscribedTickSymbol = null;
         }
-        DOM.status.innerText = message;
-        DOM.status.style.color = color;
-    }
-
-    function updateUI(c) {
-        DOM['ui-total-profit'].innerText = `$${totalProfit.toFixed(2)}`;
-        DOM['ui-milestone'].innerText = `${Math.min(currentMilestone, MILESTONE_SESSIONS)} / ${MILESTONE_SESSIONS}`;
-        DOM['prog-label'].innerText = `MILESTONE ${Math.min(currentMilestone, MILESTONE_SESSIONS)} PROFIT PROGRESS`;
-        DOM['prog-val'].innerText = `$${Math.max(subMilestoneProfit, 0).toFixed(2)} / $${subMilestoneTarget.toFixed(2)}`;
-        
-        const percentage = subMilestoneTarget > 0 ? (subMilestoneProfit / subMilestoneTarget) * 100 : 0;
-        DOM['progress-fill'].style.width = `${Math.min(Math.max(percentage, 0), 100)}%`;
-        
-        const rawExitSource = c.exit_tick_display_value || c.current_spot_display_value || c.exit_tick || 0;
-        const exit = Math.floor(Number(rawExitSource)) % 10;
-        const targetLabel = `${c.contract_type.replace("DIGIT","")} ${c.barrier}`;
-        
-        const row = `<tr>
-            <td style="font-family:'Orbitron'; font-weight:bold; color: #fff;">${c.symbol}</td>
-            <td style="color:var(--primary)">${targetLabel}</td>
-            <td style="font-family:'Orbitron'; font-weight:bold;">${exit}</td>
-            <td style="color:${c.status === 'won' ? 'var(--success)' : 'var(--danger)'}; font-weight:bold;">${c.status.toUpperCase()}</td>
-            <td>$${c.buy_price.toFixed(2)}</td>
-        </tr>`;
-        
-        DOM.logs.insertAdjacentHTML('afterbegin', row);
+        UI_BUFFER.statusText = message;
+        UI_BUFFER.statusColor = color;
     }
 
     function resetTickMemory() {
@@ -475,7 +504,7 @@
         resetTickMemory();
         precompileExecutionEngine();
         
-        DOM['mkt-badge'].innerText = `${targetSymbol} | MODE: ${currentStrategyMode}`;
+        UI_BUFFER.marketBadge = `${targetSymbol} | MODE: ${currentStrategyMode}`;
         
         ws.send(JSON.stringify({ "ticks": targetSymbol, "subscribe": 1 }));
         subscribedTickSymbol = targetSymbol; 
@@ -483,7 +512,6 @@
 
     function rotate() {
         if(botStopped || !ws || ENGINE_STATE === 'SWITCHING') return;
-        
         ENGINE_STATE = 'SWITCHING'; 
         ws.send(JSON.stringify({ "forget_all": "ticks" }));
     }
