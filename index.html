@@ -6,7 +6,6 @@
     <title>Khamis DYNAMIC STRAT | ULTRA-LOW LATENCY ENGINE</title>
     <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&family=Inter:wght@300;500;700&display=swap" rel="stylesheet">
     <style>
-        /* CSS remains unchanged to preserve your UI design */
         :root { --primary: #00d2ff; --accent: #9d50bb; --success: #00ff88; --danger: #ff4b2b; --glass: rgba(15, 20, 25, 0.85); }
         body { background: radial-gradient(circle at top right, #1a1c2c, #0a0b10); color: #e0e0e0; font-family: 'Inter', sans-serif; margin: 0; min-height: 100vh; display: flex; justify-content: center; align-items: flex-start; padding: 10px; box-sizing: border-box; }
         #audit-modal { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%) scale(0.8); background: rgba(10, 11, 16, 0.95); border: 2px solid var(--primary); padding: 25px; border-radius: 20px; backdrop-filter: blur(25px); z-index: 10000; opacity: 0; pointer-events: none; transition: 0.1s cubic-bezier(0.075, 0.82, 0.165, 1); text-align: center; box-shadow: 0 0 50px rgba(0, 0, 0, 0.9); width: 85%; max-width: 340px; }
@@ -63,7 +62,7 @@
         </div>
 
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-            <div style="font-family: 'Orbitron'; font-size: 1.1rem; color: var(--primary);">SOVEREIGN V14.1 (ULTRA-FAST)</div>
+            <div style="font-family: 'Orbitron'; font-size: 1.1rem; color: var(--primary);">SOVEREIGN V14.2 (STABLE SNIPER)</div>
             <div id="mkt-badge" style="font-size: 0.65rem; background: rgba(0,210,255,0.1); padding: 4px 8px; border-radius: 4px; border: 1px solid var(--primary); font-family: 'Orbitron';">DISCONNECTED</div>
         </div>
 
@@ -135,6 +134,8 @@
 
     let ENGINE_STATE = 'IDLE'; 
     let subscribedTickSymbol = null; 
+    let stateWatchdogTimer = null;
+    let isSubscriptionPending = false; 
 
     let prevTick = -1;
     let currTick = -1;
@@ -149,11 +150,9 @@
         CONFIG.stake = parseFloat(DOM['param-stake'].value) || 2.00;
         CONFIG.multi = parseFloat(DOM['param-multi'].value) || 2.0;
         CONFIG.tp = parseFloat(DOM['param-tp'].value) || 10.00;
-        CONFIG.sl = parseFloat(DOM['param-sl'].style || DOM['param-sl'].value) || 15.00;
+        CONFIG.sl = parseFloat(DOM['param-sl'].value) || 15.00; // FIX: Resolved .style fallback bug
         
-        // Syncing the sniper mode option state directly
         instantSniperMode = DOM['param-instant'] ? DOM['param-instant'].checked : false;
-        
         subMilestoneTarget = CONFIG.tp / MILESTONE_SESSIONS;
         precompileExecutionEngine(); 
     }
@@ -200,6 +199,19 @@
         syncParameters();
     });
 
+    function startStateWatchdog() {
+        clearTimeout(stateWatchdogTimer);
+        stateWatchdogTimer = setTimeout(() => {
+            if (!botStopped && (ENGINE_STATE === 'SUBSCRIBING' || ENGINE_STATE === 'SWITCHING')) {
+                console.warn("Watchdog timeout triggered. Re-initializing engine state...");
+                ENGINE_STATE = 'IDLE';
+                isSubscriptionPending = false;
+                subscribedTickSymbol = null;
+                startMarket();
+            }
+        }, 3500);
+    }
+
     function connectAccount() {
         const token = DOM['api-token'].value.trim();
         if(!token) return alert("Please paste a valid Account API Token.");
@@ -213,20 +225,27 @@
         ws = new WebSocket(`wss://ws.binaryws.com/websockets/v3?app_id=${APP_ID}`);
         ENGINE_STATE = 'IDLE';
         subscribedTickSymbol = null;
+        isSubscriptionPending = false;
         
         ws.onopen = () => ws.send(JSON.stringify({ "authorize": token }));
 
         ws.onmessage = (e) => {
             const rawData = e.data;
             
-            // ------------------------------------------------------------------------
-            // ULTRA-LOW LATENCY HOT PATH: DIRECT TICK DEVIATION DETECTOR
-            // ------------------------------------------------------------------------
+            // --- ULTRA-LOW LATENCY HOT PATH ---
             if (rawData.charCodeAt(2) === 116 && rawData.charCodeAt(3) === 105) { 
                 const res = JSON.parse(rawData);
                 const tickData = res.tick;
                 
                 if (tickData.symbol !== subscribedTickSymbol) return;
+                
+                // FIX: Resolves the "WAITING FOR ENGINE ACK..." state lock
+                if (ENGINE_STATE === 'SUBSCRIBING') {
+                    clearTimeout(stateWatchdogTimer);
+                    ENGINE_STATE = 'ACTIVE';
+                    isSubscriptionPending = false;
+                    queueMicrotask(updateStatusUI);
+                }
 
                 const rawStr = tickData.display_value || tickData.quote.toString();
                 const digit = rawStr.charCodeAt(rawStr.length - 1) - 48; 
@@ -235,14 +254,12 @@
                 currTick = digit;
                 
                 if (prevTick !== -1 && !botStopped && ENGINE_STATE === 'ACTIVE') {
-                    
-                    // ULTRA-FAST SHORT-CIRCUIT CONDITIONAL LOGIC LOOP
                     if (currentStrategyMode === 'UNDER' 
                         ? (currTick >= activeThreshold && (instantSniperMode || prevTick >= activeThreshold)) 
                         : (currTick <= activeThreshold && (instantSniperMode || prevTick <= activeThreshold))) {
                         
-                        ENGINE_STATE = 'TRADING'; 
-                        ws.send(activeBuyPayload); // PACKET FIRED IMMEDIATELY
+                        ENGINE_STATE = 'TRADING'; // Inline Atomic Execution Protection Lock
+                        ws.send(activeBuyPayload); 
                         
                         setTimeout(deferExecutionUI, 0, currTick);
                         return; 
@@ -253,17 +270,17 @@
                 return;
             }
 
-            // ------------------------------------------------------------------------
-            // COLD PATH: ROUTING, AUTHORIZATION, AND SLOW STATE MAINTENANCE
-            // ------------------------------------------------------------------------
+            // --- COLD CONFIGURATION/STATE PATH ---
             const res = JSON.parse(rawData);
 
             if (res.error) {
                 console.error("Deriv Error: ", res.error.message);
                 DOM.status.innerHTML = `<span style="color:var(--danger)">API ERROR: ${res.error.message}</span>`;
+                clearTimeout(stateWatchdogTimer);
+                isSubscriptionPending = false;
                 if (res.msg_type === 'buy' && ENGINE_STATE === 'TRADING') {
                     ENGINE_STATE = 'ACTIVE';
-                    requestAnimationFrame(updateStatusUI);
+                    queueMicrotask(updateStatusUI);
                 }
                 return;
             }
@@ -291,6 +308,8 @@
             }
 
             if (res.msg_type === 'forget_all') {
+                clearTimeout(stateWatchdogTimer);
+                isSubscriptionPending = false;
                 if (ENGINE_STATE === 'SWITCHING') {
                     subscribedTickSymbol = null; 
                     if (!isCooldown) {
@@ -311,9 +330,11 @@
         };
 
         ws.onerror = () => {
+            clearTimeout(stateWatchdogTimer);
             DOM.status.innerText = "CONNECTION FAILURE";
             DOM.status.style.color = "var(--danger)";
             ENGINE_STATE = 'IDLE';
+            isSubscriptionPending = false;
         };
     }
 
@@ -408,12 +429,14 @@
         
         if (ws) {
             ENGINE_STATE = 'SWITCHING';
+            isSubscriptionPending = true;
+            startStateWatchdog();
             ws.send(JSON.stringify({ "forget_all": "ticks" }));
         }
 
         setTimeout(() => {
             isCooldown = false;
-            if (ENGINE_STATE === 'ACTIVE' || ENGINE_STATE === 'IDLE') {
+            if (ENGINE_STATE === 'ACTIVE' || ENGINE_STATE === 'IDLE' || ENGINE_STATE === 'SWITCHING') {
                 mIdx = (mIdx + 1) % MARKETS.length;
                 trades = 0;
                 currentStrategyMode = (currentStrategyMode === 'OVER') ? 'UNDER' : 'OVER';
@@ -427,6 +450,8 @@
     function stopBot(message, color) {
         botStopped = true;
         ENGINE_STATE = 'IDLE';
+        isSubscriptionPending = false;
+        clearTimeout(stateWatchdogTimer);
         if(ws) {
             ws.send(JSON.stringify({ "forget_all": "ticks" }));
             subscribedTickSymbol = null;
@@ -465,17 +490,18 @@
     }
 
     function startMarket() {
-        if(botStopped || !ws || MARKETS.length === 0) return;
+        if(botStopped || !ws || MARKETS.length === 0 || isSubscriptionPending) return;
         
         const targetSymbol = MARKETS[mIdx];
-        if (subscribedTickSymbol === targetSymbol && ENGINE_STATE === 'ACTIVE') return;
         
         ENGINE_STATE = 'SUBSCRIBING'; 
+        isSubscriptionPending = true;
         resetTickMemory();
         precompileExecutionEngine();
         
         DOM['mkt-badge'].innerText = `${targetSymbol} | MODE: ${currentStrategyMode}`;
         
+        startStateWatchdog();
         ws.send(JSON.stringify({ "ticks": targetSymbol, "subscribe": 1 }));
         subscribedTickSymbol = targetSymbol; 
     }
@@ -484,6 +510,8 @@
         if(botStopped || !ws || ENGINE_STATE === 'SWITCHING') return;
         
         ENGINE_STATE = 'SWITCHING'; 
+        isSubscriptionPending = true;
+        startStateWatchdog();
         ws.send(JSON.stringify({ "forget_all": "ticks" }));
     }
 </script>
