@@ -97,6 +97,13 @@
             <div class="config-box"><label class="stat-label">Martingale Mult.</label><input type="number" id="param-multi" class="config-input" value="2.0" step="0.1" oninput="syncParameters()"></div>
             <div class="config-box"><label class="stat-label">Ultimate TP ($)</label><input type="number" id="param-tp" class="config-input" value="10.00" step="1" oninput="syncParameters()"></div>
             <div class="config-box"><label class="stat-label">Stop Loss ($)</label><input type="number" id="param-sl" class="config-input" value="15.00" step="1" oninput="syncParameters()"></div>
+            
+            <div class="config-box" style="grid-column: span 2; display: flex; flex-direction: row; align-items: center; justify-content: space-between; background: rgba(255,255,255,0.03); padding: 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05); margin-top: 5px;">
+                <label class="stat-label" style="margin-bottom: 0; cursor: pointer; display: flex; align-items: center; gap: 8px;" for="param-over1-override">
+                    <span style="color: var(--primary); font-weight: bold;">⚡ OVER 1 ON 0/1 TRIGGER</span>
+                </label>
+                <input type="checkbox" id="param-over1-override" onchange="updateStatusUI()" style="width: 18px; height: 18px; accent-color: var(--primary); cursor: pointer;">
+            </div>
         </div>
 
         <div class="log-container">
@@ -113,7 +120,7 @@
     window.addEventListener('DOMContentLoaded', () => {
         ['api-token', 'status', 'mkt-badge', 'digit', 'prog-label', 'prog-val', 'progress-fill', 
          'ui-milestone', 'ui-total-profit', 'bal', 'stk', 'param-stake', 'param-multi', 
-         'param-tp', 'param-sl', 'logs', 'audit-modal', 'audit-target', 'audit-exit', 'audit-outcome']
+         'param-tp', 'param-sl', 'logs', 'audit-modal', 'audit-target', 'audit-exit', 'audit-outcome', 'param-over1-override']
         .forEach(id => DOM[id] = document.getElementById(id));
     });
 
@@ -126,7 +133,7 @@
     let MARKETS = [], mIdx = 0, trades = 0, consecutiveLosses = 0;
     let botStopped = true, isCooldown = false;
     let ws = null;
-    let currentStrategyMode = 'OVER'; 
+    let currentStrategyMode = 'UNDER'; // Default changed to UNDER strategy mode 
 
     let ENGINE_STATE = 'IDLE'; 
     let subscribedTickSymbol = null; 
@@ -135,7 +142,7 @@
     let currTick = -1;
 
     let cachedStakeStr = "2.00";
-    let activeThreshold = 1;      
+    let activeThreshold = 8;      
     let activeBuyPayload = "";    
 
     function syncParameters() {
@@ -156,7 +163,6 @@
         
         if (consecutiveLosses > 0) {
             calculatedStake = CONFIG.stake * Math.pow(CONFIG.multi, consecutiveLosses);
-            // STRATEGY UPDATE: Changed recovery barrier from UNDER 6 to UNDER 7 for high matching digit pairs
             activeThreshold = (currentStrategyMode === 'UNDER') ? 7 : 3;
             contractType = (currentStrategyMode === 'UNDER') ? "DIGITUNDER" : "DIGITOVER";
         } else {
@@ -277,16 +283,54 @@
                 
                 if (prevTick !== -1 && !botStopped && ENGINE_STATE === 'ACTIVE') {
                     let triggered = false;
-                    
-                    if (currentStrategyMode === 'UNDER') {
-                        if (prevTick >= activeThreshold && currTick >= activeThreshold) triggered = true;
-                    } else {
-                        if (prevTick <= activeThreshold && currTick <= activeThreshold) triggered = true;
+                    let useOver1Payload = false;
+
+                    const over1Override = DOM['param-over1-override'] && DOM['param-over1-override'].checked;
+
+                    // OVERRIDE CONDITION: 1 or 0 appears immediately after confirmation setup (prev tick 0 or 1)
+                    if (over1Override && (prevTick === 0 || prevTick === 1) && (currTick === 0 || currTick === 1)) {
+                        triggered = true;
+                        useOver1Payload = true;
+                    }
+
+                    // STANDARD STRATEGY CONDITION (Fallback if override condition is unfulfilled)
+                    if (!triggered) {
+                        if (currentStrategyMode === 'UNDER') {
+                            if (prevTick >= activeThreshold && currTick >= activeThreshold) triggered = true;
+                        } else {
+                            if (prevTick <= activeThreshold && currTick <= activeThreshold) triggered = true;
+                        }
                     }
 
                     if (triggered) {
                         ENGINE_STATE = 'TRADING'; 
-                        ws.send(activeBuyPayload);
+                        
+                        if (useOver1Payload) {
+                            let calculatedStake = CONFIG.stake;
+                            if (consecutiveLosses > 0) {
+                                calculatedStake = CONFIG.stake * Math.pow(CONFIG.multi, consecutiveLosses);
+                            }
+                            const floatStake = parseFloat(calculatedStake.toFixed(2));
+                            cachedStakeStr = floatStake.toFixed(2);
+                            
+                            const over1Obj = {
+                                "buy": 1, 
+                                "price": floatStake,
+                                "parameters": {
+                                    "amount": floatStake, 
+                                    "basis": "stake",
+                                    "contract_type": "DIGITOVER", 
+                                    "currency": "USD",
+                                    "duration": 1, 
+                                    "duration_unit": "t",
+                                    "symbol": MARKETS[mIdx], 
+                                    "barrier": "1"
+                                }
+                            };
+                            ws.send(JSON.stringify(over1Obj));
+                        } else {
+                            ws.send(activeBuyPayload);
+                        }
                         
                         requestAnimationFrame(() => {
                             DOM.stk.innerText = `$${cachedStakeStr}`;
@@ -330,9 +374,12 @@
             DOM.status.innerHTML = `<span style="color:var(--primary); font-weight:bold;">COOLDOWN PAUSE... ROTATING ASSETS</span>`;
             return;
         }
+        const over1Override = DOM['param-over1-override'] && DOM['param-over1-override'].checked;
+        const overrideStr = over1Override ? ` | <span style="color:var(--success); font-weight:bold;">⚡ OVER 1 ACTIVE</span>` : '';
+
         const stateStr = consecutiveLosses > 0 ? `<span style="color:var(--danger)">MARTINGALE MODE</span>` : "NORMAL HUNTING";
         const opStr = (currentStrategyMode === 'UNDER') ? 'UNDER' : 'OVER';
-        DOM.status.innerHTML = `${stateStr} | ${opStr} ${activeThreshold}`;
+        DOM.status.innerHTML = `${stateStr} | ${opStr} ${activeThreshold}${overrideStr}`;
     }
 
     function handleFinish(c) {
