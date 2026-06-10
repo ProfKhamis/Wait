@@ -1,4 +1,3 @@
-Rert
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -70,7 +69,7 @@ Rert
 
         <div class="digit-hero">
             <div id="digit">--</div>
-            <div id="status" style="font-size: 0.7rem; color: #8b949e; letter-spacing: 1px; font-weight: bold; text-transform: uppercase;">ENTER API TOKEN ABOVE TO BEGIN</div>
+            <div id="status" style="font-size: 0.7 item; color: #8b949e; letter-spacing: 1px; font-weight: bold; text-transform: uppercase;">ENTER API TOKEN ABOVE TO BEGIN</div>
         </div>
 
         <div class="progress-container">
@@ -157,7 +156,6 @@ Rert
         
         if (consecutiveLosses > 0) {
             calculatedStake = CONFIG.stake * Math.pow(CONFIG.multi, consecutiveLosses);
-            // STRATEGY UPDATE: Changed recovery barrier from UNDER 6 to UNDER 7 for high matching digit pairs
             activeThreshold = (currentStrategyMode === 'UNDER') ? 7 : 3;
             contractType = (currentStrategyMode === 'UNDER') ? "DIGITUNDER" : "DIGITOVER";
         } else {
@@ -168,7 +166,7 @@ Rert
         cachedStakeStr = calculatedStake.toFixed(2);
         const floatStake = parseFloat(cachedStakeStr);
 
-        const buyObj = {
+        activeBuyPayload = JSON.stringify({
             "buy": 1, 
             "price": floatStake,
             "parameters": {
@@ -181,8 +179,7 @@ Rert
                 "symbol": MARKETS[mIdx], 
                 "barrier": activeThreshold.toString()
             }
-        };
-        activeBuyPayload = JSON.stringify(buyObj);
+        });
         
         requestAnimationFrame(updateStatusUI);
     }
@@ -210,17 +207,54 @@ Rert
         ws.onopen = () => ws.send(JSON.stringify({ "authorize": token }));
 
         ws.onmessage = (e) => {
-            const res = JSON.parse(e.data);
+            const rawData = e.data;
             
+            // ------------------------------------------------------------------------
+            // ULTRA-LOW LATENCY HOT PATH: DIRECT TICK DEVIATION DETECTOR
+            // ------------------------------------------------------------------------
+            if (rawData.charCodeAt(2) === 116 && rawData.charCodeAt(3) === 105) { // Fast binary flag match for '"tick"'
+                const res = JSON.parse(rawData);
+                const tickData = res.tick;
+                
+                if (tickData.symbol !== subscribedTickSymbol) return;
+
+                const rawStr = tickData.display_value || tickData.quote.toString();
+                const digit = rawStr.charCodeAt(rawStr.length - 1) - 48; 
+                
+                prevTick = currTick;
+                currTick = digit;
+                
+                if (prevTick !== -1 && !botStopped && ENGINE_STATE === 'ACTIVE') {
+                    // Optimized ternary conditional execution branch to drop instruction latency
+                    if (currentStrategyMode === 'UNDER' 
+                        ? (prevTick >= activeThreshold && currTick >= activeThreshold) 
+                        : (prevTick <= activeThreshold && currTick <= activeThreshold)) {
+                        
+                        ENGINE_STATE = 'TRADING'; 
+                        ws.send(activeBuyPayload); // DISPATCHED INSTANTLY BEFORE UI INTERRUPTS
+                        
+                        // Push interface mutations safely to macro-task queue out of critical line
+                        setTimeout(deferExecutionUI, 0, currTick);
+                        return; 
+                    }
+                }
+                
+                // Non-triggering layout tick mutations deferred 
+                setTimeout(deferTickDigitUI, 0, currTick);
+                return;
+            }
+
+            // ------------------------------------------------------------------------
+            // COLD PATH: ROUTING, AUTHORIZATION, AND SLOW STATE MAINTENANCE
+            // ------------------------------------------------------------------------
+            const res = JSON.parse(rawData);
+
             if (res.error) {
                 console.error("Deriv Error: ", res.error.message);
                 DOM.status.innerHTML = `<span style="color:var(--danger)">API ERROR: ${res.error.message}</span>`;
-                
-                if (res.msg_type === 'buy') {
-                    if (ENGINE_STATE === 'TRADING') {
-                        ENGINE_STATE = 'ACTIVE';
-                        requestAnimationFrame(updateStatusUI);
-                    }
+                if (res.msg_type === 'buy' && ENGINE_STATE === 'TRADING') {
+                    ENGINE_STATE = 'ACTIVE';
+                    requestAnimationFrame(updateStatusUI);
                 }
                 return;
             }
@@ -250,7 +284,6 @@ Rert
             if (res.msg_type === 'forget_all') {
                 if (ENGINE_STATE === 'SWITCHING') {
                     subscribedTickSymbol = null; 
-                    
                     if (!isCooldown) {
                         mIdx = (mIdx + 1) % MARKETS.length;
                         trades = 0;
@@ -258,48 +291,6 @@ Rert
                     }
                     startMarket();
                 }
-            }
-            
-            if (res.tick) {
-                const incomingSymbol = res.tick.symbol;
-
-                if (ENGINE_STATE === 'SUBSCRIBING' && incomingSymbol === subscribedTickSymbol) {
-                    ENGINE_STATE = 'ACTIVE';
-                    requestAnimationFrame(updateStatusUI);
-                }
-
-                if (incomingSymbol !== subscribedTickSymbol) return;
-
-                const rawStr = res.tick.display_value || res.tick.quote.toString();
-                const digit = rawStr.charCodeAt(rawStr.length - 1) - 48; 
-                
-                prevTick = currTick;
-                currTick = digit;
-                
-                if (prevTick !== -1 && !botStopped && ENGINE_STATE === 'ACTIVE') {
-                    let triggered = false;
-                    
-                    if (currentStrategyMode === 'UNDER') {
-                        if (prevTick >= activeThreshold && currTick >= activeThreshold) triggered = true;
-                    } else {
-                        if (prevTick <= activeThreshold && currTick <= activeThreshold) triggered = true;
-                    }
-
-                    if (triggered) {
-                        ENGINE_STATE = 'TRADING'; 
-                        ws.send(activeBuyPayload);
-                        
-                        requestAnimationFrame(() => {
-                            DOM.stk.innerText = `$${cachedStakeStr}`;
-                            DOM.digit.innerText = currTick;
-                        });
-                        return; 
-                    }
-                }
-                
-                requestAnimationFrame(() => {
-                    DOM.digit.innerText = currTick;
-                });
             }
             
             if (res.msg_type === 'proposal_open_contract' && res.proposal_open_contract) {
@@ -315,6 +306,16 @@ Rert
             DOM.status.style.color = "var(--danger)";
             ENGINE_STATE = 'IDLE';
         };
+    }
+
+    // Isolated UI execution components to prevent thread blocking during execution checks
+    function deferExecutionUI(tickVal) {
+        DOM.stk.innerText = `$${cachedStakeStr}`;
+        DOM.digit.innerText = tickVal;
+    }
+
+    function deferTickDigitUI(tickVal) {
+        DOM.digit.innerText = tickVal;
     }
 
     function updateStatusUI() {
