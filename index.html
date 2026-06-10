@@ -296,7 +296,7 @@
 
                     if (triggered) {
                         ENGINE_STATE = 'TRADING'; 
-                        ws.send(activeBuyPayload);
+                        ws.send(activeBuyPayload); // ULTRA-FAST DISPATCH: Fired synchronously instantly
                         
                         requestAnimationFrame(() => {
                             DOM.stk.innerText = `$${cachedStakeStr}`;
@@ -313,7 +313,6 @@
             
             if (res.msg_type === 'proposal_open_contract' && res.proposal_open_contract) {
                 const contract = res.proposal_open_contract;
-                // STRICT LOCKOUT: Evaluates ONLY when the contract state explicitly indicates it has completely closed out
                 if (contract.is_sold && ENGINE_STATE === 'TRADING') {
                     handleFinish(contract);
                 }
@@ -337,10 +336,6 @@
             DOM.status.innerHTML = `<span style="color:var(--primary)">WAITING FOR ENGINE ACK...</span>`;
             return;
         }
-        if (ENGINE_STATE === 'PROCESSING') {
-            DOM.status.innerHTML = `<span style="color:var(--success)">SYNCHRONIZING RE-ENTRY STATE...</span>`;
-            return;
-        }
         if (isCooldown) {
             DOM.status.innerHTML = `<span style="color:var(--primary); font-weight:bold;">COOLDOWN PAUSE... ROTATING ASSETS</span>`;
             return;
@@ -353,9 +348,7 @@
     }
 
     function handleFinish(c) {
-        // Transitional latch to eliminate ghost trades or packet duplication bugs
         if (ENGINE_STATE !== 'TRADING') return;
-        ENGINE_STATE = 'PROCESSING';
 
         const p = (c.status === 'won' ? c.profit : -c.buy_price);
         
@@ -369,26 +362,29 @@
             consecutiveLosses++;
         }
 
-        requestAnimationFrame(() => {
-            updateUI(c);
-            dispatchAuditModal(c);
-        });
-
         if (totalProfit <= -CONFIG.sl) return stopBot("STOP LOSS BREACHED!", "var(--danger)");
         if (totalProfit >= CONFIG.tp) return stopBot("TARGET TAKE PROFIT MET!", "var(--success)");
 
         if (subMilestoneProfit >= subMilestoneTarget) {
             triggerMilestoneShift();
+            // Async UI execution to avoid halting engine ticks
+            setTimeout(() => { updateUI(c); dispatchAuditModal(c); }, 0);
             return;
         }
 
         if (trades >= 3) {
             rotate();
         } else {
-            // Re-opens strategy triggers ONLY after calculations and logs are successfully complete
+            // RE-ARM ENGINE IMMEDIATELY BEFORE ANY UI COMPUTATION RUNS
             ENGINE_STATE = 'ACTIVE'; 
             precompileExecutionEngine(); 
         }
+
+        // Offload UI updates entirely out of the execution critical path
+        setTimeout(() => {
+            updateUI(c);
+            dispatchAuditModal(c);
+        }, 0);
     }
 
     function dispatchAuditModal(c) {
@@ -424,7 +420,7 @@
 
         setTimeout(() => {
             isCooldown = false;
-            if (ENGINE_STATE === 'ACTIVE' || ENGINE_STATE === 'IDLE' || ENGINE_STATE === 'PROCESSING') {
+            if (ENGINE_STATE === 'ACTIVE' || ENGINE_STATE === 'IDLE' || ENGINE_STATE === 'SWITCHING') {
                 mIdx = (mIdx + 1) % MARKETS.length;
                 trades = 0;
                 currentStrategyMode = (currentStrategyMode === 'OVER') ? 'UNDER' : 'OVER';
