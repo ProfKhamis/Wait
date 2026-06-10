@@ -161,21 +161,11 @@
         
         if (consecutiveLosses > 0) {
             calculatedStake = CONFIG.stake * Math.pow(CONFIG.multi, consecutiveLosses);
-        }
-
-        if (specialModeEnabled) {
-            activeThreshold = (currentStrategyMode === 'UNDER') ? 8 : 1;
-            contractType = (currentStrategyMode === 'UNDER') ? "DIGITUNDER" : "DIGITOVER";
+            activeThreshold = (currentStrategyMode === 'UNDER') ? 7 : 2;
         } else {
-            if (consecutiveLosses > 0) {
-                // RECOVERY MODE BARRIER UPDATED: Changed from 3 to 2 for OVER mode recovery
-                activeThreshold = (currentStrategyMode === 'UNDER') ? 7 : 2;
-                contractType = (currentStrategyMode === 'UNDER') ? "DIGITUNDER" : "DIGITOVER";
-            } else {
-                activeThreshold = (currentStrategyMode === 'UNDER') ? 8 : 1;
-                contractType = (currentStrategyMode === 'UNDER') ? "DIGITUNDER" : "DIGITOVER";
-            }
+            activeThreshold = (currentStrategyMode === 'UNDER') ? 8 : 1;
         }
+        contractType = (currentStrategyMode === 'UNDER') ? "DIGITUNDER" : "DIGITOVER";
 
         cachedStakeStr = calculatedStake.toFixed(2);
         const floatStake = parseFloat(cachedStakeStr);
@@ -291,13 +281,15 @@
                 if (prevTick !== -1 && !botStopped && ENGINE_STATE === 'ACTIVE') {
                     let triggered = false;
                     
-                    if (specialModeEnabled) {
+                    // RECOVERY OVERRIDE: Special mode trigger logic ONLY executes if consecutive losses are 0
+                    if (specialModeEnabled && consecutiveLosses === 0) {
                         if (currentStrategyMode === 'UNDER') {
-                            if (currTick === 8 || currTick === 9) triggered = true;
+                            if (currTick >= activeThreshold) triggered = true;
                         } else {
-                            if (currTick === 0 || currTick === 1) triggered = true;
+                            if (currTick <= activeThreshold) triggered = true;
                         }
                     } else {
+                        // Regular Base Mode & All Recovery Modes use the 2 consecutive tick system
                         if (currentStrategyMode === 'UNDER') {
                             if (prevTick >= activeThreshold && currTick >= activeThreshold) triggered = true;
                         } else {
@@ -354,7 +346,8 @@
         
         const stateStr = consecutiveLosses > 0 ? `<span style="color:var(--danger)">MARTINGALE MODE</span>` : "NORMAL HUNTING";
         const opStr = (currentStrategyMode === 'UNDER') ? 'UNDER' : 'OVER';
-        const specialStr = specialModeEnabled ? ' (SPECIAL ON)' : '';
+        // Only show Special Mode status flag if it's currently active in execution
+        const specialStr = (specialModeEnabled && consecutiveLosses === 0) ? ' (SPECIAL ON)' : '';
         DOM.status.innerHTML = `${stateStr} | ${opStr} ${activeThreshold}${specialStr}`;
     }
 
