@@ -69,7 +69,7 @@
 
         <div class="digit-hero">
             <div id="digit">--</div>
-            <div id="status" style="font-size: 0.7 item; color: #8b949e; letter-spacing: 1px; font-weight: bold; text-transform: uppercase;">ENTER API TOKEN ABOVE TO BEGIN</div>
+            <div id="status" style="font-size: 0.7rem; color: #8b949e; letter-spacing: 1px; font-weight: bold; text-transform: uppercase;">ENTER API TOKEN ABOVE TO BEGIN</div>
         </div>
 
         <div class="progress-container">
@@ -97,6 +97,11 @@
             <div class="config-box"><label class="stat-label">Martingale Mult.</label><input type="number" id="param-multi" class="config-input" value="2.0" step="0.1" oninput="syncParameters()"></div>
             <div class="config-box"><label class="stat-label">Ultimate TP ($)</label><input type="number" id="param-tp" class="config-input" value="10.00" step="1" oninput="syncParameters()"></div>
             <div class="config-box"><label class="stat-label">Stop Loss ($)</label><input type="number" id="param-sl" class="config-input" value="15.00" step="1" oninput="syncParameters()"></div>
+            
+            <div class="config-box" style="grid-column: span 2; display: flex; flex-direction: row; justify-content: space-between; align-items: center; background: rgba(0, 210, 255, 0.03); padding: 10px; border-radius: 8px; border: 1px dashed rgba(0, 210, 255, 0.25); margin-top: 2px;">
+                <label class="stat-label" style="margin-bottom: 0; cursor: pointer; color: var(--primary); font-weight: bold; letter-spacing: 0.5px;" for="param-instant">⚡ INSTANT SINGLE-TICK SNIPER</label>
+                <input type="checkbox" id="param-instant" onchange="syncParameters()" style="cursor: pointer; width: 16px; height: 16px; accent-color: var(--primary);">
+            </div>
         </div>
 
         <div class="log-container">
@@ -113,7 +118,7 @@
     window.addEventListener('DOMContentLoaded', () => {
         ['api-token', 'status', 'mkt-badge', 'digit', 'prog-label', 'prog-val', 'progress-fill', 
          'ui-milestone', 'ui-total-profit', 'bal', 'stk', 'param-stake', 'param-multi', 
-         'param-tp', 'param-sl', 'logs', 'audit-modal', 'audit-target', 'audit-exit', 'audit-outcome']
+         'param-tp', 'param-sl', 'logs', 'audit-modal', 'audit-target', 'audit-exit', 'audit-outcome', 'param-instant']
         .forEach(id => DOM[id] = document.getElementById(id));
     });
 
@@ -137,13 +142,18 @@
     let cachedStakeStr = "2.00";
     let activeThreshold = 1;      
     let activeBuyPayload = "";    
+    let instantSniperMode = false;
 
     function syncParameters() {
         if(!DOM['param-stake']) return; 
         CONFIG.stake = parseFloat(DOM['param-stake'].value) || 2.00;
         CONFIG.multi = parseFloat(DOM['param-multi'].value) || 2.0;
         CONFIG.tp = parseFloat(DOM['param-tp'].value) || 10.00;
-        CONFIG.sl = parseFloat(DOM['param-sl'].value) || 15.00;
+        CONFIG.sl = parseFloat(DOM['param-sl'].style || DOM['param-sl'].value) || 15.00;
+        
+        // Syncing the sniper mode option state directly
+        instantSniperMode = DOM['param-instant'] ? DOM['param-instant'].checked : false;
+        
         subMilestoneTarget = CONFIG.tp / MILESTONE_SESSIONS;
         precompileExecutionEngine(); 
     }
@@ -212,7 +222,7 @@
             // ------------------------------------------------------------------------
             // ULTRA-LOW LATENCY HOT PATH: DIRECT TICK DEVIATION DETECTOR
             // ------------------------------------------------------------------------
-            if (rawData.charCodeAt(2) === 116 && rawData.charCodeAt(3) === 105) { // Fast binary flag match for '"tick"'
+            if (rawData.charCodeAt(2) === 116 && rawData.charCodeAt(3) === 105) { 
                 const res = JSON.parse(rawData);
                 const tickData = res.tick;
                 
@@ -225,21 +235,20 @@
                 currTick = digit;
                 
                 if (prevTick !== -1 && !botStopped && ENGINE_STATE === 'ACTIVE') {
-                    // Optimized ternary conditional execution branch to drop instruction latency
+                    
+                    // ULTRA-FAST SHORT-CIRCUIT CONDITIONAL LOGIC LOOP
                     if (currentStrategyMode === 'UNDER' 
-                        ? (prevTick >= activeThreshold && currTick >= activeThreshold) 
-                        : (prevTick <= activeThreshold && currTick <= activeThreshold)) {
+                        ? (currTick >= activeThreshold && (instantSniperMode || prevTick >= activeThreshold)) 
+                        : (currTick <= activeThreshold && (instantSniperMode || prevTick <= activeThreshold))) {
                         
                         ENGINE_STATE = 'TRADING'; 
-                        ws.send(activeBuyPayload); // DISPATCHED INSTANTLY BEFORE UI INTERRUPTS
+                        ws.send(activeBuyPayload); // PACKET FIRED IMMEDIATELY
                         
-                        // Push interface mutations safely to macro-task queue out of critical line
                         setTimeout(deferExecutionUI, 0, currTick);
                         return; 
                     }
                 }
                 
-                // Non-triggering layout tick mutations deferred 
                 setTimeout(deferTickDigitUI, 0, currTick);
                 return;
             }
@@ -308,7 +317,6 @@
         };
     }
 
-    // Isolated UI execution components to prevent thread blocking during execution checks
     function deferExecutionUI(tickVal) {
         DOM.stk.innerText = `$${cachedStakeStr}`;
         DOM.digit.innerText = tickVal;
@@ -332,7 +340,8 @@
             DOM.status.innerHTML = `<span style="color:var(--primary); font-weight:bold;">COOLDOWN PAUSE... ROTATING ASSETS</span>`;
             return;
         }
-        const stateStr = consecutiveLosses > 0 ? `<span style="color:var(--danger)">MARTINGALE MODE</span>` : "NORMAL HUNTING";
+        const sniperBadge = instantSniperMode ? ' [SNIPER]' : '';
+        const stateStr = consecutiveLosses > 0 ? `<span style="color:var(--danger)">MARTINGALE${sniperBadge}</span>` : `NORMAL HUNTING${sniperBadge}`;
         const opStr = (currentStrategyMode === 'UNDER') ? 'UNDER' : 'OVER';
         DOM.status.innerHTML = `${stateStr} | ${opStr} ${activeThreshold}`;
     }
