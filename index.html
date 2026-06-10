@@ -60,6 +60,10 @@
                     <button id="btn-connect" class="btn-action" style="padding: 0 20px; width: auto; font-size: 0.8rem;" onclick="connectAccount()">Connect Bot</button>
                 </div>
             </div>
+            <div class="config-box" style="flex-direction: row; align-items: center; justify-content: center; gap: 10px; margin-top: 5px; padding: 8px; background: rgba(0,0,0,0.2); border-radius: 8px; border: 1px solid rgba(255,255,255,0.05);">
+                <input type="checkbox" id="param-special" style="accent-color: var(--primary); transform: scale(1.2); cursor: pointer;" onchange="specialModeEnabled = this.checked; precompileExecutionEngine();">
+                <label for="param-special" class="stat-label" style="margin: 0; color: #fff; cursor: pointer; font-size: 0.75rem;">Special Mode (Over 1 / Under 8)</label>
+            </div>
         </div>
 
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
@@ -111,7 +115,7 @@
 <script>
     const DOM = {};
     window.addEventListener('DOMContentLoaded', () => {
-        ['api-token', 'status', 'mkt-badge', 'digit', 'prog-label', 'prog-val', 'progress-fill', 
+        ['api-token', 'param-special', 'status', 'mkt-badge', 'digit', 'prog-label', 'prog-val', 'progress-fill', 
          'ui-milestone', 'ui-total-profit', 'bal', 'stk', 'param-stake', 'param-multi', 
          'param-tp', 'param-sl', 'logs', 'audit-modal', 'audit-target', 'audit-exit', 'audit-outcome']
         .forEach(id => DOM[id] = document.getElementById(id));
@@ -137,6 +141,7 @@
     let cachedStakeStr = "2.00";
     let activeThreshold = 1;      
     let activeBuyPayload = "";    
+    let specialModeEnabled = false; 
 
     function syncParameters() {
         if(!DOM['param-stake']) return; 
@@ -156,12 +161,20 @@
         
         if (consecutiveLosses > 0) {
             calculatedStake = CONFIG.stake * Math.pow(CONFIG.multi, consecutiveLosses);
-            // STRATEGY UPDATE: Changed recovery barrier from UNDER 6 to UNDER 7 for high matching digit pairs
-            activeThreshold = (currentStrategyMode === 'UNDER') ? 7 : 3;
-            contractType = (currentStrategyMode === 'UNDER') ? "DIGITUNDER" : "DIGITOVER";
-        } else {
+        }
+
+        if (specialModeEnabled) {
             activeThreshold = (currentStrategyMode === 'UNDER') ? 8 : 1;
             contractType = (currentStrategyMode === 'UNDER') ? "DIGITUNDER" : "DIGITOVER";
+        } else {
+            if (consecutiveLosses > 0) {
+                // RECOVERY MODE BARRIER UPDATED: Changed from 3 to 2 for OVER mode recovery
+                activeThreshold = (currentStrategyMode === 'UNDER') ? 7 : 2;
+                contractType = (currentStrategyMode === 'UNDER') ? "DIGITUNDER" : "DIGITOVER";
+            } else {
+                activeThreshold = (currentStrategyMode === 'UNDER') ? 8 : 1;
+                contractType = (currentStrategyMode === 'UNDER') ? "DIGITUNDER" : "DIGITOVER";
+            }
         }
 
         cachedStakeStr = calculatedStake.toFixed(2);
@@ -278,10 +291,18 @@
                 if (prevTick !== -1 && !botStopped && ENGINE_STATE === 'ACTIVE') {
                     let triggered = false;
                     
-                    if (currentStrategyMode === 'UNDER') {
-                        if (prevTick >= activeThreshold && currTick >= activeThreshold) triggered = true;
+                    if (specialModeEnabled) {
+                        if (currentStrategyMode === 'UNDER') {
+                            if (currTick === 8 || currTick === 9) triggered = true;
+                        } else {
+                            if (currTick === 0 || currTick === 1) triggered = true;
+                        }
                     } else {
-                        if (prevTick <= activeThreshold && currTick <= activeThreshold) triggered = true;
+                        if (currentStrategyMode === 'UNDER') {
+                            if (prevTick >= activeThreshold && currTick >= activeThreshold) triggered = true;
+                        } else {
+                            if (prevTick <= activeThreshold && currTick <= activeThreshold) triggered = true;
+                        }
                     }
 
                     if (triggered) {
@@ -330,9 +351,11 @@
             DOM.status.innerHTML = `<span style="color:var(--primary); font-weight:bold;">COOLDOWN PAUSE... ROTATING ASSETS</span>`;
             return;
         }
+        
         const stateStr = consecutiveLosses > 0 ? `<span style="color:var(--danger)">MARTINGALE MODE</span>` : "NORMAL HUNTING";
         const opStr = (currentStrategyMode === 'UNDER') ? 'UNDER' : 'OVER';
-        DOM.status.innerHTML = `${stateStr} | ${opStr} ${activeThreshold}`;
+        const specialStr = specialModeEnabled ? ' (SPECIAL ON)' : '';
+        DOM.status.innerHTML = `${stateStr} | ${opStr} ${activeThreshold}${specialStr}`;
     }
 
     function handleFinish(c) {
