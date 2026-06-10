@@ -6,7 +6,6 @@
     <title>Khamis DYNAMIC STRAT | ULTRA-LOW LATENCY ENGINE</title>
     <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&family=Inter:wght@300;500;700&display=swap" rel="stylesheet">
     <style>
-        /* CSS remains unchanged to preserve your UI design */
         :root { --primary: #00d2ff; --accent: #9d50bb; --success: #00ff88; --danger: #ff4b2b; --glass: rgba(15, 20, 25, 0.85); }
         body { background: radial-gradient(circle at top right, #1a1c2c, #0a0b10); color: #e0e0e0; font-family: 'Inter', sans-serif; margin: 0; min-height: 100vh; display: flex; justify-content: center; align-items: flex-start; padding: 10px; box-sizing: border-box; }
         #audit-modal { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%) scale(0.8); background: rgba(10, 11, 16, 0.95); border: 2px solid var(--primary); padding: 25px; border-radius: 20px; backdrop-filter: blur(25px); z-index: 10000; opacity: 0; pointer-events: none; transition: 0.1s cubic-bezier(0.075, 0.82, 0.165, 1); text-align: center; box-shadow: 0 0 50px rgba(0, 0, 0, 0.9); width: 85%; max-width: 340px; }
@@ -281,7 +280,6 @@
                 if (prevTick !== -1 && !botStopped && ENGINE_STATE === 'ACTIVE') {
                     let triggered = false;
                     
-                    // RECOVERY OVERRIDE: Special mode trigger logic ONLY executes if consecutive losses are 0
                     if (specialModeEnabled && consecutiveLosses === 0) {
                         if (currentStrategyMode === 'UNDER') {
                             if (currTick >= activeThreshold) triggered = true;
@@ -289,7 +287,6 @@
                             if (currTick <= activeThreshold) triggered = true;
                         }
                     } else {
-                        // Regular Base Mode & All Recovery Modes use the 2 consecutive tick system
                         if (currentStrategyMode === 'UNDER') {
                             if (prevTick >= activeThreshold && currTick >= activeThreshold) triggered = true;
                         } else {
@@ -316,6 +313,7 @@
             
             if (res.msg_type === 'proposal_open_contract' && res.proposal_open_contract) {
                 const contract = res.proposal_open_contract;
+                // STRICT LOCKOUT: Evaluates ONLY when the contract state explicitly indicates it has completely closed out
                 if (contract.is_sold && ENGINE_STATE === 'TRADING') {
                     handleFinish(contract);
                 }
@@ -339,6 +337,10 @@
             DOM.status.innerHTML = `<span style="color:var(--primary)">WAITING FOR ENGINE ACK...</span>`;
             return;
         }
+        if (ENGINE_STATE === 'PROCESSING') {
+            DOM.status.innerHTML = `<span style="color:var(--success)">SYNCHRONIZING RE-ENTRY STATE...</span>`;
+            return;
+        }
         if (isCooldown) {
             DOM.status.innerHTML = `<span style="color:var(--primary); font-weight:bold;">COOLDOWN PAUSE... ROTATING ASSETS</span>`;
             return;
@@ -346,12 +348,15 @@
         
         const stateStr = consecutiveLosses > 0 ? `<span style="color:var(--danger)">MARTINGALE MODE</span>` : "NORMAL HUNTING";
         const opStr = (currentStrategyMode === 'UNDER') ? 'UNDER' : 'OVER';
-        // Only show Special Mode status flag if it's currently active in execution
         const specialStr = (specialModeEnabled && consecutiveLosses === 0) ? ' (SPECIAL ON)' : '';
         DOM.status.innerHTML = `${stateStr} | ${opStr} ${activeThreshold}${specialStr}`;
     }
 
     function handleFinish(c) {
+        // Transitional latch to eliminate ghost trades or packet duplication bugs
+        if (ENGINE_STATE !== 'TRADING') return;
+        ENGINE_STATE = 'PROCESSING';
+
         const p = (c.status === 'won' ? c.profit : -c.buy_price);
         
         subMilestoneProfit += p; 
@@ -380,6 +385,7 @@
         if (trades >= 3) {
             rotate();
         } else {
+            // Re-opens strategy triggers ONLY after calculations and logs are successfully complete
             ENGINE_STATE = 'ACTIVE'; 
             precompileExecutionEngine(); 
         }
@@ -418,7 +424,7 @@
 
         setTimeout(() => {
             isCooldown = false;
-            if (ENGINE_STATE === 'ACTIVE' || ENGINE_STATE === 'IDLE') {
+            if (ENGINE_STATE === 'ACTIVE' || ENGINE_STATE === 'IDLE' || ENGINE_STATE === 'PROCESSING') {
                 mIdx = (mIdx + 1) % MARKETS.length;
                 trades = 0;
                 currentStrategyMode = (currentStrategyMode === 'OVER') ? 'UNDER' : 'OVER';
