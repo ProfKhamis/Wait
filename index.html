@@ -632,17 +632,20 @@
             }
         }
 
-        onAuthorized(accountId) {
+                onAuthorized(accountId) {
             this.trade.botStopped = false; 
             this.ui.updateStatus(`CONNECTED [${accountId}]. MOUNTING WEBSOCKET...`, "var(--success)");
             this.ui.clearTokenUI(); 
             
             this.conn.send({ balance: 1, subscribe: 1 });
             this.conn.send({ proposal_open_contract: 1, subscribe: 1 });
-            this.conn.send({ active_symbols: "brief", product_type: "basic" });
+            
+            // CORRECTED: Removed invalid 'product_type' property
+            this.conn.send({ active_symbols: "brief" }); 
             
             this.trade.syncParameters();
         }
+
     }
 
     // Initialize Global Access
