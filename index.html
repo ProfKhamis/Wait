@@ -356,6 +356,9 @@
     console.log("ACTIVE SYMBOL RESPONSE:", res);
     window.Engine.market.setMarkets(res.active_symbols);
     break;
+                    case 'proposal':
+    window.Engine.trade.onProposal(res.proposal);
+    break;
                 case 'tick':
                     window.Engine.market.onTick(res.tick);
                     break;
@@ -473,6 +476,7 @@ window.Engine.conn.send({
         }
     }
 
+    
     // --- MODULE: TRADE MANAGER ---
     class TradeManager {
         constructor() {
@@ -495,7 +499,19 @@ window.Engine.conn.send({
             
             this.trackedContractId = null; 
         }
+onProposal(proposal) {
+    if (!proposal || !proposal.id) return;
 
+    this.currentProposalId = proposal.id;
+
+    console.log("PROPOSAL RECEIVED:", proposal);
+
+    // NOW BUY USING PROPOSAL ID
+    window.Engine.conn.send({
+        buy: proposal.id,
+        price: parseFloat(this.cachedStakeStr)
+    });
+}
         syncParameters() {
             const ui = window.Engine.ui.DOM;
             this.params.stake = parseFloat(ui['param-stake'].value) || 2.00;
@@ -520,20 +536,17 @@ window.Engine.conn.send({
             this.cachedStakeStr = calculatedStake.toFixed(2);
             const floatStake = parseFloat(this.cachedStakeStr);
 
-            this.activeBuyPayload = {
-                buy: 1, 
-                price: floatStake,
-                parameters: {
-                    amount: floatStake, 
-                    basis: "stake",
-                    contract_type: contractType, 
-                    currency: "USD",
-                    duration: 1, 
-                    duration_unit: "t",
-                    symbol: window.Engine.market.subscribedSymbol, 
-                    barrier: this.activeThreshold.toString()
-                }
-            };
+            this.conn.send({
+    proposal: 1,
+    amount: floatStake,
+    basis: "stake",
+    contract_type: contractType,
+    currency: "USD",
+    duration: 1,
+    duration_unit: "t",
+    symbol: window.Engine.market.subscribedSymbol,
+    barrier: this.activeThreshold.toString()
+});
             
             this.updateStatusUI();
         }
