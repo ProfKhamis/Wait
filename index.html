@@ -661,7 +661,8 @@
     
     // 3. GET ACTIVE SYMBOLS (Clean request, no extra filters)
     // "brief" is the standard parameter to get a manageable list of symbols.
-    this.conn.send({ active_symbols: "brief" });
+    this.conn.send({ active_symbols: "brief"
+                   });
     this.trade.syncParameters();
 }
 
