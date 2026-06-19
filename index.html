@@ -353,8 +353,9 @@
                     window.Engine.ui.updateBalance(res.balance.balance);
                     break;
                 case 'active_symbols':
-                    window.Engine.market.setMarkets(res.active_symbols);
-                    break;
+    console.log("ACTIVE SYMBOL RESPONSE:", res);
+    window.Engine.market.setMarkets(res.active_symbols);
+    break;
                 case 'tick':
                     window.Engine.market.onTick(res.tick);
                     break;
@@ -393,7 +394,7 @@
     console.log("ACTIVE SYMBOLS:", symbols);
 
     const filtered = symbols.filter(s => {
-        const sym = s.underlying_symbol || s.symbol;
+        const sym = s.symbol || s.symbol;
 
         return (
             sym &&
@@ -405,7 +406,7 @@
     });
 
     this.markets = filtered.map(
-        s => s.underlying_symbol || s.symbol
+        s => s.symbol || s.symbol
     );
 
     console.log("FILTERED:", this.markets);
@@ -426,7 +427,12 @@
             window.Engine.trade.precompileExecutionEngine();
             window.Engine.ui.updateMarketBadge(`${targetSymbol} | MODE: ${window.Engine.trade.currentStrategyMode}`);
             
-            window.Engine.conn.send({ ticks: targetSymbol, subscribe: 1 });
+            console.log("SUBSCRIBING:", targetSymbol);
+
+window.Engine.conn.send({
+    ticks: targetSymbol,
+    subscribe: 1
+});
             this.subscribedSymbol = targetSymbol;
         }
 
@@ -455,7 +461,7 @@
                 window.Engine.trade.engineState = 'ACTIVE';
                 window.Engine.trade.updateStatusUI();
             }
-
+           console.log("TICK:", tickData.symbol, tickData.quote);
             const rawStr = tickData.display_value || tickData.quote.toString();
             const digit = rawStr.charCodeAt(rawStr.length - 1) - 48;
             
@@ -553,8 +559,14 @@
         }
 
         onBuyAcknowledge(buyData) {
-            this.trackedContractId = buyData.contract_id;
-        }
+    this.trackedContractId = buyData.contract_id;
+
+    window.Engine.conn.send({
+        proposal_open_contract: 1,
+        contract_id: buyData.contract_id,
+        subscribe: 1
+    });
+}
 
         onContractUpdate(contract) {
             if (contract.contract_id !== this.trackedContractId) return;
