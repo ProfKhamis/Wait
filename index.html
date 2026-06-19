@@ -112,387 +112,507 @@
 </div>
 
 <script>
-    const DOM = {};
-    window.addEventListener('DOMContentLoaded', () => {
-        ['api-token', 'param-special', 'status', 'mkt-badge', 'digit', 'prog-label', 'prog-val', 'progress-fill', 
-         'ui-milestone', 'ui-total-profit', 'bal', 'stk', 'param-stake', 'param-multi', 
-         'param-tp', 'param-sl', 'logs', 'audit-modal', 'audit-target', 'audit-exit', 'audit-outcome']
-        .forEach(id => DOM[id] = document.getElementById(id));
-    });
+    /**
+     * KHAMIS DYNAMIC STRAT | ULTRA-LOW LATENCY ENGINE (2026 AUDITED)
+     * Modules: UIManager, SubscriptionManager, TradeManager, MarketDataManager, DerivConnectionManager
+     */
 
-    const APP_ID = 126967;
-    let CONFIG = { stake: 2.00, multi: 2.0, tp: 10.00, sl: 15.00 };
-    
-    const MILESTONE_SESSIONS = 4; 
-    let currentMilestone = 1, subMilestoneTarget = 0.00, subMilestoneProfit = 0.00, totalProfit = 0.00;
-    
-    let MARKETS = [], mIdx = 0, trades = 0, consecutiveLosses = 0;
-    let botStopped = true, isCooldown = false;
-    let ws = null;
-    let currentStrategyMode = 'OVER'; 
+    const CONFIG = {
+        APP_ID: 126967,
+        WS_URL: 'wss://ws.binaryws.com/websockets/v3',
+        MILESTONE_SESSIONS: 4
+    };
 
-    let ENGINE_STATE = 'IDLE'; 
-    let subscribedTickSymbol = null; 
-
-    let prevTick = -1;
-    let currTick = -1;
-
-    let cachedStakeStr = "2.00";
-    let activeThreshold = 1;      
-    let activeBuyPayload = "";    
-    let specialModeEnabled = false; 
-
-    function syncParameters() {
-        if(!DOM['param-stake']) return; 
-        CONFIG.stake = parseFloat(DOM['param-stake'].value) || 2.00;
-        CONFIG.multi = parseFloat(DOM['param-multi'].value) || 2.0;
-        CONFIG.tp = parseFloat(DOM['param-tp'].value) || 10.00;
-        CONFIG.sl = parseFloat(DOM['param-sl'].value) || 15.00;
-        subMilestoneTarget = CONFIG.tp / MILESTONE_SESSIONS;
-        precompileExecutionEngine(); 
-    }
-
-    function precompileExecutionEngine() {
-        if (botStopped || MARKETS.length === 0) return;
-
-        let calculatedStake = CONFIG.stake;
-        let contractType = "";
-        
-        if (consecutiveLosses > 0) {
-            calculatedStake = CONFIG.stake * Math.pow(CONFIG.multi, consecutiveLosses);
-            activeThreshold = (currentStrategyMode === 'UNDER') ? 7 : 2;
-        } else {
-            activeThreshold = (currentStrategyMode === 'UNDER') ? 8 : 1;
-        }
-        contractType = (currentStrategyMode === 'UNDER') ? "DIGITUNDER" : "DIGITOVER";
-
-        cachedStakeStr = calculatedStake.toFixed(2);
-        const floatStake = parseFloat(cachedStakeStr);
-
-        const buyObj = {
-            "buy": 1, 
-            "price": floatStake,
-            "parameters": {
-                "amount": floatStake, 
-                "basis": "stake",
-                "contract_type": contractType, 
-                "currency": "USD",
-                "duration": 1, 
-                "duration_unit": "t",
-                "symbol": MARKETS[mIdx], 
-                "barrier": activeThreshold.toString()
-            }
-        };
-        activeBuyPayload = JSON.stringify(buyObj);
-        
-        requestAnimationFrame(updateStatusUI);
-    }
-
-    window.addEventListener('load', () => {
-        const savedToken = localStorage.getItem('deriv_api_token');
-        if(savedToken && DOM['api-token']) DOM['api-token'].value = savedToken;
-        syncParameters();
-    });
-
-    function connectAccount() {
-        const token = DOM['api-token'].value.trim();
-        if(!token) return alert("Please paste a valid Account API Token.");
-
-        localStorage.setItem('deriv_api_token', token);
-        if (ws) ws.close();
-
-        DOM.status.innerText = "CONNECTING TO WEBSOCKET...";
-        DOM.status.style.color = "var(--primary)";
-
-        ws = new WebSocket(`wss://ws.binaryws.com/websockets/v3?app_id=${APP_ID}`);
-        ENGINE_STATE = 'IDLE';
-        subscribedTickSymbol = null;
-        
-        ws.onopen = () => ws.send(JSON.stringify({ "authorize": token }));
-
-        ws.onmessage = (e) => {
-            const res = JSON.parse(e.data);
+    // --- MODULE: UI MANAGER ---
+    class UIManager {
+        constructor() {
+            this.DOM = {};
+            ['api-token', 'param-special', 'status', 'mkt-badge', 'digit', 'prog-label', 'prog-val', 'progress-fill', 
+             'ui-milestone', 'ui-total-profit', 'bal', 'stk', 'param-stake', 'param-multi', 
+             'param-tp', 'param-sl', 'logs', 'audit-modal', 'audit-target', 'audit-exit', 'audit-outcome']
+            .forEach(id => this.DOM[id] = document.getElementById(id));
             
-            if (res.error) {
-                console.error("Deriv Error: ", res.error.message);
-                DOM.status.innerHTML = `<span style="color:var(--danger)">API ERROR: ${res.error.message}</span>`;
+            this.bindEvents();
+        }
+
+        bindEvents() {
+            ['param-stake', 'param-multi', 'param-tp', 'param-sl'].forEach(id => {
+                this.DOM[id].addEventListener('input', () => window.Engine.trade.syncParameters());
+            });
+            this.DOM['param-special'].addEventListener('change', (e) => {
+                window.Engine.trade.specialModeEnabled = e.target.checked;
+                window.Engine.trade.precompileExecutionEngine();
+            });
+        }
+
+        updateStatus(message, color = "#8b949e") {
+            requestAnimationFrame(() => {
+                this.DOM.status.innerHTML = `<span style="color:${color}; font-weight:bold;">${message}</span>`;
+            });
+        }
+
+        updateDigit(digit) { requestAnimationFrame(() => this.DOM.digit.innerText = digit); }
+        updateBalance(bal) { requestAnimationFrame(() => this.DOM.bal.innerText = `$${bal.toFixed(2)}`); }
+        updateStake(stk) { requestAnimationFrame(() => this.DOM.stk.innerText = `$${stk}`); }
+        updateMarketBadge(text) { requestAnimationFrame(() => this.DOM['mkt-badge'].innerText = text); }
+        
+        updateProgress(milestone, sessions, currentProfit, targetProfit, totalProfit) {
+            requestAnimationFrame(() => {
+                this.DOM['ui-total-profit'].innerText = `$${totalProfit.toFixed(2)}`;
+                this.DOM['ui-milestone'].innerText = `${Math.min(milestone, sessions)} / ${sessions}`;
+                this.DOM['prog-label'].innerText = `MILESTONE ${Math.min(milestone, sessions)} PROFIT PROGRESS`;
+                this.DOM['prog-val'].innerText = `$${Math.max(currentProfit, 0).toFixed(2)} / $${targetProfit.toFixed(2)}`;
                 
-                if (res.msg_type === 'buy') {
-                    if (ENGINE_STATE === 'TRADING') {
-                        ENGINE_STATE = 'ACTIVE';
-                        requestAnimationFrame(updateStatusUI);
-                    }
+                const percentage = targetProfit > 0 ? (currentProfit / targetProfit) * 100 : 0;
+                this.DOM['progress-fill'].style.width = `${Math.min(Math.max(percentage, 0), 100)}%`;
+            });
+        }
+
+        logTrade(contract) {
+            const rawExitSource = contract.exit_tick_display_value || contract.current_spot_display_value || contract.exit_tick || "0";
+            const exit = rawExitSource.toString().slice(-1);
+            const targetLabel = `${contract.contract_type.replace("DIGIT","")} ${contract.barrier}`;
+            
+            const row = `<tr>
+                <td style="font-family:'Orbitron'; font-weight:bold; color: #fff;">${contract.symbol}</td>
+                <td style="color:var(--primary)">${targetLabel}</td>
+                <td style="font-family:'Orbitron'; font-weight:bold;">${exit}</td>
+                <td style="color:${contract.status === 'won' ? 'var(--success)' : 'var(--danger)'}; font-weight:bold;">${contract.status.toUpperCase()}</td>
+                <td>$${contract.buy_price.toFixed(2)}</td>
+            </tr>`;
+            
+            requestAnimationFrame(() => this.DOM.logs.insertAdjacentHTML('afterbegin', row));
+        }
+
+        dispatchAuditModal(contract) {
+            const rawExitSource = contract.exit_tick_display_value || contract.current_spot_display_value || contract.exit_tick || "0";
+            const exitDigit = rawExitSource.toString().slice(-1);
+            const targetLabel = `${contract.contract_type.replace("DIGIT","")} ${contract.barrier}`;
+            
+            requestAnimationFrame(() => {
+                this.DOM['audit-target'].innerText = targetLabel;
+                this.DOM['audit-exit'].innerText = exitDigit;
+                
+                if (contract.status === 'won') {
+                    this.DOM['audit-outcome'].innerText = "SUCCESS / WON";
+                    this.DOM['audit-outcome'].style.color = "var(--success)";
+                } else {
+                    this.DOM['audit-outcome'].innerText = "FAILED / LOST";
+                    this.DOM['audit-outcome'].style.color = "var(--danger)";
                 }
+                this.DOM['audit-modal'].classList.add('active');
+            });
+        }
+
+        closeAudit() { this.DOM['audit-modal'].classList.remove('active'); }
+        getToken() { return this.DOM['api-token'].value.trim(); }
+        clearTokenUI() { this.DOM['api-token'].value = "•••••••••••••••"; }
+    }
+
+    // --- MODULE: SUBSCRIPTION MANAGER ---
+    class SubscriptionManager {
+        constructor(conn) {
+            this.conn = conn;
+            this.activeSubs = new Map();
+        }
+
+        track(type, id) { this.activeSubs.set(type, id); }
+        
+        forget(type) {
+            const id = this.activeSubs.get(type);
+            if (id) {
+                this.conn.send({ forget: id });
+                this.activeSubs.delete(type);
+            }
+        }
+
+        forgetAllTracked() {
+            this.activeSubs.forEach((id) => this.conn.send({ forget: id }));
+            this.activeSubs.clear();
+        }
+    }
+
+    // --- MODULE: DERIV CONNECTION MANAGER ---
+    class DerivConnectionManager {
+        constructor() {
+            this.ws = null;
+            this.token = null;
+            this.pingInterval = null;
+            this.reconnectAttempts = 0;
+            this.isConnecting = false;
+        }
+
+        connect(token) {
+            if (this.isConnecting) return;
+            
+            // Validate PAT format before connection
+            if (!/^[a-zA-Z0-9]{15}$/.test(token) && !/^[a-zA-Z0-9-]{30,}$/.test(token)) {
+                window.Engine.ui.updateStatus("INVALID TOKEN FORMAT", "var(--danger)");
                 return;
             }
+
+            this.token = token;
+            this.isConnecting = true;
+            window.Engine.ui.updateStatus("CONNECTING TO DERIV V3...", "var(--primary)");
+
+            if (this.ws) this.ws.close();
+            this.ws = new WebSocket(`${CONFIG.WS_URL}?app_id=${CONFIG.APP_ID}`);
+
+            this.ws.onopen = () => {
+                this.isConnecting = false;
+                this.reconnectAttempts = 0;
+                this.send({ authorize: this.token });
+                this.pingInterval = setInterval(() => this.send({ ping: 1 }), 30000);
+            };
+
+            this.ws.onmessage = (e) => this.routeMessage(JSON.parse(e.data));
+
+            this.ws.onerror = () => {
+                window.Engine.ui.updateStatus("NETWORK CONNECTION ERROR", "var(--danger)");
+            };
+
+            this.ws.onclose = () => {
+                this.isConnecting = false;
+                clearInterval(this.pingInterval);
+                this.handleReconnect();
+            };
+        }
+
+        handleReconnect() {
+            if (!this.token || window.Engine.trade.botStopped) return;
+            this.reconnectAttempts++;
+            const backoff = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
+            window.Engine.ui.updateStatus(`CONNECTION LOST. RECONNECTING IN ${backoff/1000}s...`, "var(--danger)");
+            setTimeout(() => this.connect(this.token), backoff);
+        }
+
+        send(payload) {
+            if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                this.ws.send(JSON.stringify(payload));
+            }
+        }
+
+        routeMessage(res) {
+            if (res.error) return window.Engine.handleApiError(res.error, res.msg_type);
+
+            switch(res.msg_type) {
+                case 'authorize':
+                    window.Engine.onAuthorized(res);
+                    break;
+                case 'balance':
+                    window.Engine.ui.updateBalance(res.balance.balance);
+                    break;
+                case 'active_symbols':
+                    window.Engine.market.setMarkets(res.active_symbols);
+                    break;
+                case 'tick':
+                    window.Engine.market.onTick(res.tick);
+                    break;
+                case 'proposal_open_contract':
+                    if (res.proposal_open_contract) window.Engine.trade.onContractUpdate(res.proposal_open_contract);
+                    break;
+                case 'buy':
+                    window.Engine.trade.onBuyAcknowledge(res.buy);
+                    break;
+                case 'forget':
+                    window.Engine.market.onForgetAcknowledge();
+                    break;
+            }
+
+            // Track subscription IDs
+            if (res.subscription) {
+                if (res.msg_type === 'tick') window.Engine.subs.track('tick', res.subscription.id);
+                if (res.msg_type === 'proposal_open_contract') window.Engine.subs.track('poc', res.subscription.id);
+            }
+        }
+    }
+
+    // --- MODULE: MARKET DATA MANAGER ---
+    class MarketDataManager {
+        constructor() {
+            this.markets = [];
+            this.mIdx = 0;
+            this.subscribedSymbol = null;
+            this.prevTick = -1;
+            this.currTick = -1;
+        }
+
+        setMarkets(symbols) {
+            const filtered = symbols.filter(s => 
+                s.market === "synthetic_index" && s.submarket === "random_index" &&
+                (s.symbol.match(/^R_\d+$/) || s.symbol.match(/^1HZ\d+V$/))
+            );
+            this.markets = filtered.map(s => s.symbol).sort();
+            if(this.markets.length === 0) this.markets = ["R_10", "1HZ10V", "R_25", "1HZ25V", "R_50", "1HZ50V", "R_75", "1HZ75V", "R_100", "1HZ100V"];
+            this.startMarket();
+        }
+
+        startMarket() {
+            if(window.Engine.trade.botStopped || this.markets.length === 0) return;
             
-            if (res.msg_type === 'authorize') {
-                botStopped = false; 
-                DOM.status.innerText = "CONNECTED! STRUCTURING ASSETS...";
-                ws.send(JSON.stringify({ "balance": 1, "subscribe": 1 }));
-                ws.send(JSON.stringify({ "proposal_open_contract": 1, "subscribe": 1 }));
-                ws.send(JSON.stringify({ "active_symbols": "brief", "product_type": "basic" }));
-            }
+            const targetSymbol = this.markets[this.mIdx];
+            if (this.subscribedSymbol === targetSymbol && window.Engine.trade.engineState === 'ACTIVE') return;
             
-            if (res.msg_type === 'balance') {
-                DOM.bal.innerText = `$${res.balance.balance.toFixed(2)}`;
-            }
-
-            if (res.msg_type === 'active_symbols') {
-                const symbols = res.active_symbols.filter(s => 
-                    s.market === "synthetic_index" && s.submarket === "random_index" &&
-                    (s.symbol.match(/^R_\d+$/) || s.symbol.match(/^1HZ\d+V$/))
-                );
-                MARKETS = symbols.map(s => s.symbol).sort();
-                if(MARKETS.length === 0) MARKETS = ["R_10", "1HZ10V", "R_25", "1HZ25V", "R_50", "1HZ50V", "R_75", "1HZ75V", "R_100", "1HZ100V"];
-                startMarket();
-            }
-
-            if (res.msg_type === 'forget_all') {
-                if (ENGINE_STATE === 'SWITCHING') {
-                    subscribedTickSymbol = null; 
-                    
-                    if (!isCooldown) {
-                        mIdx = (mIdx + 1) % MARKETS.length;
-                        trades = 0;
-                        currentStrategyMode = (currentStrategyMode === 'OVER') ? 'UNDER' : 'OVER';
-                    }
-                    startMarket();
-                }
-            }
+            window.Engine.trade.engineState = 'SUBSCRIBING';
+            this.prevTick = -1;
+            this.currTick = -1;
             
-            if (res.tick) {
-                const incomingSymbol = res.tick.symbol;
-
-                if (ENGINE_STATE === 'SUBSCRIBING' && incomingSymbol === subscribedTickSymbol) {
-                    ENGINE_STATE = 'ACTIVE';
-                    requestAnimationFrame(updateStatusUI);
-                }
-
-                if (incomingSymbol !== subscribedTickSymbol) return;
-
-                const rawStr = res.tick.display_value || res.tick.quote.toString();
-                const digit = rawStr.charCodeAt(rawStr.length - 1) - 48; 
-                
-                prevTick = currTick;
-                currTick = digit;
-                
-                if (prevTick !== -1 && !botStopped && ENGINE_STATE === 'ACTIVE') {
-                    let triggered = false;
-                    
-                    if (specialModeEnabled && consecutiveLosses === 0) {
-                        if (currentStrategyMode === 'UNDER') {
-                            if (currTick >= activeThreshold) triggered = true;
-                        } else {
-                            if (currTick <= activeThreshold) triggered = true;
-                        }
-                    } else {
-                        if (currentStrategyMode === 'UNDER') {
-                            if (prevTick >= activeThreshold && currTick >= activeThreshold) triggered = true;
-                        } else {
-                            if (prevTick <= activeThreshold && currTick <= activeThreshold) triggered = true;
-                        }
-                    }
-
-                    if (triggered) {
-                        ENGINE_STATE = 'TRADING'; 
-                        ws.send(activeBuyPayload); // ULTRA-FAST DISPATCH: Fired synchronously instantly
-                        
-                        requestAnimationFrame(() => {
-                            DOM.stk.innerText = `$${cachedStakeStr}`;
-                            DOM.digit.innerText = currTick;
-                        });
-                        return; 
-                    }
-                }
-                
-                requestAnimationFrame(() => {
-                    DOM.digit.innerText = currTick;
-                });
-            }
+            window.Engine.trade.precompileExecutionEngine();
+            window.Engine.ui.updateMarketBadge(`${targetSymbol} | MODE: ${window.Engine.trade.currentStrategyMode}`);
             
-            if (res.msg_type === 'proposal_open_contract' && res.proposal_open_contract) {
-                const contract = res.proposal_open_contract;
-                if (contract.is_sold && ENGINE_STATE === 'TRADING') {
-                    handleFinish(contract);
+            window.Engine.conn.send({ ticks: targetSymbol, subscribe: 1 });
+            this.subscribedSymbol = targetSymbol;
+        }
+
+        rotate() {
+            if(window.Engine.trade.botStopped || window.Engine.trade.engineState === 'SWITCHING') return;
+            window.Engine.trade.engineState = 'SWITCHING';
+            window.Engine.subs.forget('tick');
+        }
+
+        onForgetAcknowledge() {
+            if (window.Engine.trade.engineState === 'SWITCHING') {
+                this.subscribedSymbol = null; 
+                if (!window.Engine.trade.isCooldown) {
+                    this.mIdx = (this.mIdx + 1) % this.markets.length;
+                    window.Engine.trade.tradesInCurrentMarket = 0;
+                    window.Engine.trade.currentStrategyMode = (window.Engine.trade.currentStrategyMode === 'OVER') ? 'UNDER' : 'OVER';
                 }
+                this.startMarket();
             }
-        };
-
-        ws.onerror = () => {
-            DOM.status.innerText = "CONNECTION FAILURE";
-            DOM.status.style.color = "var(--danger)";
-            ENGINE_STATE = 'IDLE';
-        };
-    }
-
-    function updateStatusUI() {
-        if (botStopped) return;
-        if (ENGINE_STATE === 'SWITCHING') {
-            DOM.status.innerHTML = `<span style="color:var(--accent)">UNSUBSCRIBING STREAM...</span>`;
-            return;
-        }
-        if (ENGINE_STATE === 'SUBSCRIBING') {
-            DOM.status.innerHTML = `<span style="color:var(--primary)">WAITING FOR ENGINE ACK...</span>`;
-            return;
-        }
-        if (isCooldown) {
-            DOM.status.innerHTML = `<span style="color:var(--primary); font-weight:bold;">COOLDOWN PAUSE... ROTATING ASSETS</span>`;
-            return;
-        }
-        
-        const stateStr = consecutiveLosses > 0 ? `<span style="color:var(--danger)">MARTINGALE MODE</span>` : "NORMAL HUNTING";
-        const opStr = (currentStrategyMode === 'UNDER') ? 'UNDER' : 'OVER';
-        const specialStr = (specialModeEnabled && consecutiveLosses === 0) ? ' (SPECIAL ON)' : '';
-        DOM.status.innerHTML = `${stateStr} | ${opStr} ${activeThreshold}${specialStr}`;
-    }
-
-    function handleFinish(c) {
-        if (ENGINE_STATE !== 'TRADING') return;
-
-        const p = (c.status === 'won' ? c.profit : -c.buy_price);
-        
-        subMilestoneProfit += p; 
-        totalProfit += p; 
-        trades++;
-        
-        if (c.status === 'won') {
-            consecutiveLosses = 0;
-        } else {
-            consecutiveLosses++;
         }
 
-        if (totalProfit <= -CONFIG.sl) return stopBot("STOP LOSS BREACHED!", "var(--danger)");
-        if (totalProfit >= CONFIG.tp) return stopBot("TARGET TAKE PROFIT MET!", "var(--success)");
+        onTick(tickData) {
+            if (tickData.symbol !== this.subscribedSymbol) return;
 
-        if (subMilestoneProfit >= subMilestoneTarget) {
-            triggerMilestoneShift();
-            // Async UI execution to avoid halting engine ticks
-            setTimeout(() => { updateUI(c); dispatchAuditModal(c); }, 0);
-            return;
-        }
-
-        if (trades >= 3) {
-            rotate();
-        } else {
-            // RE-ARM ENGINE IMMEDIATELY BEFORE ANY UI COMPUTATION RUNS
-            ENGINE_STATE = 'ACTIVE'; 
-            precompileExecutionEngine(); 
-        }
-
-        // Offload UI updates entirely out of the execution critical path
-        setTimeout(() => {
-            updateUI(c);
-            dispatchAuditModal(c);
-        }, 0);
-    }
-
-    function dispatchAuditModal(c) {
-        const rawExitSource = c.exit_tick_display_value || c.current_spot_display_value || c.exit_tick || "0";
-        const exitDigit = rawExitSource.toString().slice(-1);
-        const targetLabel = `${c.contract_type.replace("DIGIT","")} ${c.barrier}`;
-        
-        DOM['audit-target'].innerText = targetLabel;
-        DOM['audit-exit'].innerText = exitDigit;
-        
-        if (c.status === 'won') {
-            DOM['audit-outcome'].innerText = "SUCCESS / WON";
-            DOM['audit-outcome'].style.color = "var(--success)";
-        } else {
-            DOM['audit-outcome'].innerText = "FAILED / LOST";
-            DOM['audit-outcome'].style.color = "var(--danger)";
-        }
-        DOM['audit-modal'].classList.add('active');
-    }
-
-    function triggerMilestoneShift() {
-        isCooldown = true;
-        subMilestoneProfit = 0.00; 
-        currentMilestone++;
-        resetTickMemory();
-
-        DOM.status.innerHTML = `<span style="color:var(--success); font-weight:bold;">MILESTONE SECURED! COOLING DOWN...</span>`;
-        
-        if (ws) {
-            ENGINE_STATE = 'SWITCHING';
-            ws.send(JSON.stringify({ "forget_all": "ticks" }));
-        }
-
-        setTimeout(() => {
-            isCooldown = false;
-            if (ENGINE_STATE === 'ACTIVE' || ENGINE_STATE === 'IDLE' || ENGINE_STATE === 'SWITCHING') {
-                mIdx = (mIdx + 1) % MARKETS.length;
-                trades = 0;
-                currentStrategyMode = (currentStrategyMode === 'OVER') ? 'UNDER' : 'OVER';
-                startMarket();
+            if (window.Engine.trade.engineState === 'SUBSCRIBING') {
+                window.Engine.trade.engineState = 'ACTIVE';
+                window.Engine.trade.updateStatusUI();
             }
-        }, 5000); 
-    }
 
-    function closeAudit() { DOM['audit-modal'].classList.remove('active'); }
+            const rawStr = tickData.display_value || tickData.quote.toString();
+            const digit = rawStr.charCodeAt(rawStr.length - 1) - 48;
+            
+            this.prevTick = this.currTick;
+            this.currTick = digit;
+            window.Engine.ui.updateDigit(digit);
 
-    function stopBot(message, color) {
-        botStopped = true;
-        ENGINE_STATE = 'IDLE';
-        if(ws) {
-            ws.send(JSON.stringify({ "forget_all": "ticks" }));
-            subscribedTickSymbol = null;
+            if (this.prevTick !== -1 && !window.Engine.trade.botStopped && window.Engine.trade.engineState === 'ACTIVE') {
+                window.Engine.trade.evaluateTick(this.prevTick, this.currTick);
+            }
         }
-        DOM.status.innerText = message;
-        DOM.status.style.color = color;
     }
 
-    function updateUI(c) {
-        DOM['ui-total-profit'].innerText = `$${totalProfit.toFixed(2)}`;
-        DOM['ui-milestone'].innerText = `${Math.min(currentMilestone, MILESTONE_SESSIONS)} / ${MILESTONE_SESSIONS}`;
-        DOM['prog-label'].innerText = `MILESTONE ${Math.min(currentMilestone, MILESTONE_SESSIONS)} PROFIT PROGRESS`;
-        DOM['prog-val'].innerText = `$${Math.max(subMilestoneProfit, 0).toFixed(2)} / $${subMilestoneTarget.toFixed(2)}`;
-        
-        const percentage = subMilestoneTarget > 0 ? (subMilestoneProfit / subMilestoneTarget) * 100 : 0;
-        DOM['progress-fill'].style.width = `${Math.min(Math.max(percentage, 0), 100)}%`;
-        
-        const rawExitSource = c.exit_tick_display_value || c.current_spot_display_value || c.exit_tick || "0";
-        const exit = rawExitSource.toString().slice(-1);
-        const targetLabel = `${c.contract_type.replace("DIGIT","")} ${c.barrier}`;
-        
-        const row = `<tr>
-            <td style="font-family:'Orbitron'; font-weight:bold; color: #fff;">${c.symbol}</td>
-            <td style="color:var(--primary)">${targetLabel}</td>
-            <td style="font-family:'Orbitron'; font-weight:bold;">${exit}</td>
-            <td style="color:${c.status === 'won' ? 'var(--success)' : 'var(--danger)'}; font-weight:bold;">${c.status.toUpperCase()}</td>
-            <td>$${c.buy_price.toFixed(2)}</td>
-        </tr>`;
-        
-        DOM.logs.insertAdjacentHTML('afterbegin', row);
+    // --- MODULE: TRADE MANAGER ---
+    class TradeManager {
+        constructor() {
+            this.botStopped = true;
+            this.isCooldown = false;
+            this.engineState = 'IDLE'; 
+            
+            this.currentStrategyMode = 'OVER';
+            this.specialModeEnabled = false;
+            
+            this.params = { stake: 2.00, multi: 2.0, tp: 10.00, sl: 15.00 };
+            this.milestoneData = { current: 1, subTarget: 0, subProfit: 0, totalProfit: 0 };
+            
+            this.consecutiveLosses = 0;
+            this.tradesInCurrentMarket = 0;
+            
+            this.activeThreshold = 1;
+            this.activeBuyPayload = null; // Cached for zero-serialization execution
+            this.cachedStakeStr = "2.00";
+            
+            this.trackedContractId = null; // Prevents race conditions
+        }
+
+        syncParameters() {
+            const ui = window.Engine.ui.DOM;
+            this.params.stake = parseFloat(ui['param-stake'].value) || 2.00;
+            this.params.multi = parseFloat(ui['param-multi'].value) || 2.0;
+            this.params.tp = parseFloat(ui['param-tp'].value) || 10.00;
+            this.params.sl = parseFloat(ui['param-sl'].value) || 15.00;
+            this.milestoneData.subTarget = this.params.tp / CONFIG.MILESTONE_SESSIONS;
+            this.precompileExecutionEngine();
+        }
+
+        precompileExecutionEngine() {
+            if (this.botStopped || window.Engine.market.markets.length === 0) return;
+
+            let calculatedStake = this.params.stake;
+            if (this.consecutiveLosses > 0) calculatedStake = this.params.stake * Math.pow(this.params.multi, this.consecutiveLosses);
+            
+            this.activeThreshold = this.currentStrategyMode === 'UNDER' ? 
+                (this.consecutiveLosses > 0 ? 7 : 8) : 
+                (this.consecutiveLosses > 0 ? 2 : 1);
+
+            const contractType = this.currentStrategyMode === 'UNDER' ? "DIGITUNDER" : "DIGITOVER";
+            this.cachedStakeStr = calculatedStake.toFixed(2);
+            const floatStake = parseFloat(this.cachedStakeStr);
+
+            // Pre-serialize payload to bypass JS JSON overhead during critical execution path
+            this.activeBuyPayload = {
+                buy: 1, 
+                price: floatStake,
+                parameters: {
+                    amount: floatStake, 
+                    basis: "stake",
+                    contract_type: contractType, 
+                    currency: "USD",
+                    duration: 1, 
+                    duration_unit: "t",
+                    symbol: window.Engine.market.subscribedSymbol, 
+                    barrier: this.activeThreshold.toString()
+                }
+            };
+            
+            this.updateStatusUI();
+        }
+
+        evaluateTick(prevTick, currTick) {
+            let triggered = false;
+            
+            if (this.specialModeEnabled && this.consecutiveLosses === 0) {
+                if (this.currentStrategyMode === 'UNDER') { if (currTick >= this.activeThreshold) triggered = true; } 
+                else { if (currTick <= this.activeThreshold) triggered = true; }
+            } else {
+                if (this.currentStrategyMode === 'UNDER') { if (prevTick >= this.activeThreshold && currTick >= this.activeThreshold) triggered = true; } 
+                else { if (prevTick <= this.activeThreshold && currTick <= this.activeThreshold) triggered = true; }
+            }
+
+            if (triggered) {
+                this.engineState = 'TRADING';
+                // ULTRA-LOW LATENCY EXECUTION
+                window.Engine.conn.send(this.activeBuyPayload); 
+                window.Engine.ui.updateStake(this.cachedStakeStr);
+            }
+        }
+
+        onBuyAcknowledge(buyData) {
+            this.trackedContractId = buyData.contract_id; // Secure context to specific trade
+        }
+
+        onContractUpdate(contract) {
+            // Ignore updates from historical or unmatched contracts
+            if (contract.contract_id !== this.trackedContractId) return;
+            if (contract.is_sold && this.engineState === 'TRADING') this.handleResolution(contract);
+        }
+
+        handleResolution(contract) {
+            const p = (contract.status === 'won' ? contract.profit : -contract.buy_price);
+            this.milestoneData.subProfit += p; 
+            this.milestoneData.totalProfit += p; 
+            this.tradesInCurrentMarket++;
+            
+            this.consecutiveLosses = contract.status === 'won' ? 0 : this.consecutiveLosses + 1;
+
+            if (this.milestoneData.totalProfit <= -this.params.sl) return this.stop("STOP LOSS BREACHED!", "var(--danger)");
+            if (this.milestoneData.totalProfit >= this.params.tp) return this.stop("TARGET TAKE PROFIT MET!", "var(--success)");
+
+            if (this.milestoneData.subProfit >= this.milestoneData.subTarget) {
+                this.triggerMilestoneShift();
+            } else if (this.tradesInCurrentMarket >= 3) {
+                window.Engine.market.rotate();
+            } else {
+                this.engineState = 'ACTIVE'; 
+                this.precompileExecutionEngine(); 
+            }
+
+            // Offload UI updates outside the execution critical path
+            setTimeout(() => {
+                window.Engine.ui.updateProgress(this.milestoneData.current, CONFIG.MILESTONE_SESSIONS, this.milestoneData.subProfit, this.milestoneData.subTarget, this.milestoneData.totalProfit);
+                window.Engine.ui.logTrade(contract);
+                window.Engine.ui.dispatchAuditModal(contract);
+            }, 0);
+        }
+
+        triggerMilestoneShift() {
+            this.isCooldown = true;
+            this.milestoneData.subProfit = 0.00; 
+            this.milestoneData.current++;
+            
+            window.Engine.ui.updateStatus("MILESTONE SECURED! COOLING DOWN...", "var(--success)");
+            window.Engine.market.rotate();
+
+            setTimeout(() => {
+                this.isCooldown = false;
+                if (['ACTIVE', 'IDLE', 'SWITCHING'].includes(this.engineState)) {
+                    window.Engine.market.mIdx = (window.Engine.market.mIdx + 1) % window.Engine.market.markets.length;
+                    this.tradesInCurrentMarket = 0;
+                    this.currentStrategyMode = (this.currentStrategyMode === 'OVER') ? 'UNDER' : 'OVER';
+                    window.Engine.market.startMarket();
+                }
+            }, 5000); 
+        }
+
+        stop(message, color) {
+            this.botStopped = true;
+            this.engineState = 'IDLE';
+            window.Engine.subs.forgetAllTracked();
+            window.Engine.ui.updateStatus(message, color);
+        }
+
+        updateStatusUI() {
+            if (this.botStopped) return;
+            if (this.engineState === 'SWITCHING') return window.Engine.ui.updateStatus("UNSUBSCRIBING STREAM...", "var(--accent)");
+            if (this.engineState === 'SUBSCRIBING') return window.Engine.ui.updateStatus("WAITING FOR ENGINE ACK...", "var(--primary)");
+            if (this.isCooldown) return window.Engine.ui.updateStatus("COOLDOWN PAUSE... ROTATING ASSETS", "var(--primary)");
+            
+            const stateStr = this.consecutiveLosses > 0 ? `<span style="color:var(--danger)">MARTINGALE MODE</span>` : "NORMAL HUNTING";
+            const specialStr = (this.specialModeEnabled && this.consecutiveLosses === 0) ? ' (SPECIAL ON)' : '';
+            window.Engine.ui.updateStatus(`${stateStr} | ${this.currentStrategyMode} ${this.activeThreshold}${specialStr}`);
+        }
     }
 
-    function resetTickMemory() {
-        prevTick = -1;
-        currTick = -1;
+    // --- MAIN ENGINE ORCHESTRATOR ---
+    class BotEngine {
+        constructor() {
+            this.ui = new UIManager();
+            this.conn = new DerivConnectionManager();
+            this.subs = new SubscriptionManager(this.conn);
+            this.market = new MarketDataManager();
+            this.trade = new TradeManager();
+        }
+
+        handleApiError(error, context) {
+            console.error(`[Deriv API Error: ${context}]`, error.message);
+            this.ui.updateStatus(`API ERROR: ${error.message}`, "var(--danger)");
+            
+            if (context === 'buy' && this.trade.engineState === 'TRADING') {
+                this.trade.engineState = 'ACTIVE';
+                this.trade.updateStatusUI();
+            } else if (context === 'authorize') {
+                this.trade.botStopped = true;
+                this.conn.ws.close();
+            }
+        }
+
+        onAuthorized(res) {
+            this.trade.botStopped = false; 
+            this.ui.updateStatus("CONNECTED! STRUCTURING ASSETS...", "var(--primary)");
+            this.ui.clearTokenUI(); // Secure token visually post-connection
+            
+            this.conn.send({ balance: 1, subscribe: 1 });
+            this.conn.send({ proposal_open_contract: 1, subscribe: 1 });
+            this.conn.send({ active_symbols: "brief", product_type: "basic" });
+            
+            this.trade.syncParameters();
+        }
     }
 
-    function startMarket() {
-        if(botStopped || !ws || MARKETS.length === 0) return;
-        
-        const targetSymbol = MARKETS[mIdx];
-        if (subscribedTickSymbol === targetSymbol && ENGINE_STATE === 'ACTIVE') return;
-        
-        ENGINE_STATE = 'SUBSCRIBING'; 
-        resetTickMemory();
-        precompileExecutionEngine();
-        
-        DOM['mkt-badge'].innerText = `${targetSymbol} | MODE: ${currentStrategyMode}`;
-        
-        ws.send(JSON.stringify({ "ticks": targetSymbol, "subscribe": 1 }));
-        subscribedTickSymbol = targetSymbol; 
-    }
+    // Initialize Global Access
+    window.addEventListener('DOMContentLoaded', () => {
+        window.Engine = new BotEngine();
+    });
 
-    function rotate() {
-        if(botStopped || !ws || ENGINE_STATE === 'SWITCHING') return;
-        
-        ENGINE_STATE = 'SWITCHING'; 
-        ws.send(JSON.stringify({ "forget_all": "ticks" }));
+    // Binding the HTML connect button
+    function connectAccount() {
+        const token = window.Engine.ui.getToken();
+        window.Engine.conn.connect(token);
     }
+    
+    // Bind global HTML UI closer
+    function closeAudit() { window.Engine.ui.closeAudit(); }
 </script>
 </body>
 </html>
