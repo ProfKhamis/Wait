@@ -53,20 +53,20 @@
     <div class="main-col">
         <div class="config-grid" style="grid-template-columns: 1fr; margin-bottom: 15px; border-color: var(--primary);">
             <div class="config-box">
-                <label class="stat-label" style="color: var(--primary); font-weight: bold;">Deriv API Authentication</label>
+                <label class="stat-label" style="color: var(--primary); font-weight: bold;">Deriv API PAT Authentication</label>
                 <div style="display: flex; gap: 8px;">
-                    <input type="password" id="api-token" class="config-input" style="flex: 1; text-align: left; padding-left: 12px;" placeholder="Paste your Deriv API Account Token here...">
+                    <input type="password" id="api-token" class="config-input" style="flex: 1; text-align: left; padding-left: 12px;" placeholder="Paste your Deriv API PAT Token here...">
                     <button id="btn-connect" class="btn-action" style="padding: 0 20px; width: auto; font-size: 0.8rem;" onclick="connectAccount()">Connect Bot</button>
                 </div>
             </div>
             <div class="config-box" style="flex-direction: row; align-items: center; justify-content: center; gap: 10px; margin-top: 5px; padding: 8px; background: rgba(0,0,0,0.2); border-radius: 8px; border: 1px solid rgba(255,255,255,0.05);">
-                <input type="checkbox" id="param-special" style="accent-color: var(--primary); transform: scale(1.2); cursor: pointer;" onchange="specialModeEnabled = this.checked; precompileExecutionEngine();">
+                <input type="checkbox" id="param-special" style="accent-color: var(--primary); transform: scale(1.2); cursor: pointer;">
                 <label for="param-special" class="stat-label" style="margin: 0; color: #fff; cursor: pointer; font-size: 0.75rem;">Special Mode (Over 1 / Under 8)</label>
             </div>
         </div>
 
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-            <div style="font-family: 'Orbitron'; font-size: 1.1rem; color: var(--primary);">SOVEREIGN V14.1 (ULTRA-FAST)</div>
+            <div style="font-family: 'Orbitron'; font-size: 1.1rem; color: var(--primary);">SOVEREIGN V14.2 (PAT-AUTH ENGINE)</div>
             <div id="mkt-badge" style="font-size: 0.65rem; background: rgba(0,210,255,0.1); padding: 4px 8px; border-radius: 4px; border: 1px solid var(--primary); font-family: 'Orbitron';">DISCONNECTED</div>
         </div>
 
@@ -96,10 +96,10 @@
         </div>
 
         <div class="config-grid">
-            <div class="config-box"><label class="stat-label">Base Stake ($)</label><input type="number" id="param-stake" class="config-input" value="2.00" step="0.5" oninput="syncParameters()"></div>
-            <div class="config-box"><label class="stat-label">Martingale Mult.</label><input type="number" id="param-multi" class="config-input" value="2.0" step="0.1" oninput="syncParameters()"></div>
-            <div class="config-box"><label class="stat-label">Ultimate TP ($)</label><input type="number" id="param-tp" class="config-input" value="10.00" step="1" oninput="syncParameters()"></div>
-            <div class="config-box"><label class="stat-label">Stop Loss ($)</label><input type="number" id="param-sl" class="config-input" value="15.00" step="1" oninput="syncParameters()"></div>
+            <div class="config-box"><label class="stat-label">Base Stake ($)</label><input type="number" id="param-stake" class="config-input" value="2.00" step="0.5"></div>
+            <div class="config-box"><label class="stat-label">Martingale Mult.</label><input type="number" id="param-multi" class="config-input" value="2.0" step="0.1"></div>
+            <div class="config-box"><label class="stat-label">Ultimate TP ($)</label><input type="number" id="param-tp" class="config-input" value="10.00" step="1"></div>
+            <div class="config-box"><label class="stat-label">Stop Loss ($)</label><input type="number" id="param-sl" class="config-input" value="15.00" step="1"></div>
         </div>
 
         <div class="log-container">
@@ -113,13 +113,13 @@
 
 <script>
     /**
-     * KHAMIS DYNAMIC STRAT | ULTRA-LOW LATENCY ENGINE (2026 AUDITED)
-     * Modules: UIManager, SubscriptionManager, TradeManager, MarketDataManager, DerivConnectionManager
+     * KHAMIS DYNAMIC STRAT | ULTRA-LOW LATENCY ENGINE (MODERNIZED 2026 PAT FLOW)
+     * Complete with Automatic Account ID discovery & OTP REST execution.
      */
 
     const CONFIG = {
-        APP_ID: 126967,
-        WS_URL: 'wss://ws.binaryws.com/websockets/v3',
+        APP_ID: '33AR4YGEILkTgoDfw6g6Q', // New Alphanumeric App ID
+        API_REST_URL: 'https://api.derivws.com/trading/v1',
         MILESTONE_SESSIONS: 4
     };
 
@@ -206,7 +206,7 @@
 
         closeAudit() { this.DOM['audit-modal'].classList.remove('active'); }
         getToken() { return this.DOM['api-token'].value.trim(); }
-        clearTokenUI() { this.DOM['api-token'].value = "•••••••••••••••"; }
+        clearTokenUI() { this.DOM['api-token'].value = "•••••••••••••••••••••"; }
     }
 
     // --- MODULE: SUBSCRIPTION MANAGER ---
@@ -232,7 +232,7 @@
         }
     }
 
-    // --- MODULE: DERIV CONNECTION MANAGER ---
+    // --- MODULE: DERIV CONNECTION MANAGER (REST + WS) ---
     class DerivConnectionManager {
         constructor() {
             this.ws = null;
@@ -242,40 +242,91 @@
             this.isConnecting = false;
         }
 
-        connect(token) {
+        async connect(token) {
             if (this.isConnecting) return;
-            
-            // Validate PAT format before connection
-            if (!/^[a-zA-Z0-9]{15}$/.test(token) && !/^[a-zA-Z0-9-]{30,}$/.test(token)) {
-                window.Engine.ui.updateStatus("INVALID TOKEN FORMAT", "var(--danger)");
-                return;
-            }
+            if (!token || token.length < 10) return window.Engine.ui.updateStatus("INVALID PAT TOKEN LENGTH", "var(--danger)");
 
             this.token = token;
             this.isConnecting = true;
-            window.Engine.ui.updateStatus("CONNECTING TO DERIV V3...", "var(--primary)");
+            window.Engine.ui.updateStatus("PULLING ACCOUNT DATA VIA REST...", "var(--primary)");
 
-            if (this.ws) this.ws.close();
-            this.ws = new WebSocket(`${CONFIG.WS_URL}?app_id=${CONFIG.APP_ID}`);
+            try {
+                // STEP 1: Fetch Accounts to Automatically Discover Account ID
+                const accRes = await fetch(`${CONFIG.API_REST_URL}/options/accounts`, {
+                    method: "GET",
+                    headers: {
+                        "Deriv-App-ID": CONFIG.APP_ID,
+                        "Authorization": `Bearer ${this.token}`
+                    }
+                });
+                
+                const accData = await accRes.json();
+                if (!accRes.ok || accData.errors || accData.error) {
+                    throw new Error(accData.errors?.[0]?.message || accData.error?.message || "Failed to retrieve accounts.");
+                }
+                
+                const accounts = accData.data;
+                if (!accounts || accounts.length === 0) throw new Error("No trading accounts found for this token.");
+                
+                // Prioritize Demo Account (e.g. VRT), fallback to standard/real if demo unavailable
+                let selectedAccount = accounts.find(a => {
+                    const idStr = String(a.id || a.loginid || a.account_id || '');
+                    return idStr.startsWith('VRT') || (a.is_demo === true);
+                }) || accounts[0];
+                
+                // Resolve ID irrespective of the specific endpoint schema version
+                const accountId = selectedAccount.id || selectedAccount.loginid || selectedAccount.account_id;
+                
+                if(!accountId) throw new Error("Could not parse Account ID payload.");
+                window.Engine.ui.updateStatus(`ACCOUNT [${accountId}] FOUND. GENERATING OTP...`, "var(--primary)");
 
-            this.ws.onopen = () => {
+                // STEP 2: Request Dynamic Authenticated WebSocket OTP URL
+                const otpRes = await fetch(`${CONFIG.API_REST_URL}/options/accounts/${accountId}/otp`, {
+                    method: "POST",
+                    headers: {
+                        "Deriv-App-ID": CONFIG.APP_ID,
+                        "Authorization": `Bearer ${this.token}`
+                    }
+                });
+                
+                const otpData = await otpRes.json();
+                if (!otpRes.ok || otpData.errors || otpData.error) {
+                    throw new Error(otpData.errors?.[0]?.message || otpData.error?.message || "Failed to generate WebSocket OTP.");
+                }
+                
+                const wsUrl = otpData.data.url;
+                
+                // STEP 3: Connect to the short-lived OTP WebSocket URL
+                window.Engine.ui.updateStatus("CONNECTING SECURE WEBSOCKET...", "var(--primary)");
+                if (this.ws) this.ws.close();
+                
+                this.ws = new WebSocket(wsUrl);
+
+                this.ws.onopen = () => {
+                    this.isConnecting = false;
+                    this.reconnectAttempts = 0;
+                    this.pingInterval = setInterval(() => this.send({ ping: 1 }), 30000);
+                    
+                    // Already Authenticated by OTP - trigger initialization
+                    window.Engine.onAuthorized(accountId);
+                };
+
+                this.ws.onmessage = (e) => this.routeMessage(JSON.parse(e.data));
+
+                this.ws.onerror = () => {
+                    window.Engine.ui.updateStatus("WEBSOCKET CONNECTION FAILED", "var(--danger)");
+                };
+
+                this.ws.onclose = () => {
+                    this.isConnecting = false;
+                    clearInterval(this.pingInterval);
+                    this.handleReconnect();
+                };
+
+            } catch (err) {
                 this.isConnecting = false;
-                this.reconnectAttempts = 0;
-                this.send({ authorize: this.token });
-                this.pingInterval = setInterval(() => this.send({ ping: 1 }), 30000);
-            };
-
-            this.ws.onmessage = (e) => this.routeMessage(JSON.parse(e.data));
-
-            this.ws.onerror = () => {
-                window.Engine.ui.updateStatus("NETWORK CONNECTION ERROR", "var(--danger)");
-            };
-
-            this.ws.onclose = () => {
-                this.isConnecting = false;
-                clearInterval(this.pingInterval);
-                this.handleReconnect();
-            };
+                window.Engine.handleApiError(err, 'OAuth_REST');
+            }
         }
 
         handleReconnect() {
@@ -283,6 +334,8 @@
             this.reconnectAttempts++;
             const backoff = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
             window.Engine.ui.updateStatus(`CONNECTION LOST. RECONNECTING IN ${backoff/1000}s...`, "var(--danger)");
+            
+            // Critical: Re-execute the whole REST->OTP cycle on disconnect! OTPs cannot be reused.
             setTimeout(() => this.connect(this.token), backoff);
         }
 
@@ -296,9 +349,6 @@
             if (res.error) return window.Engine.handleApiError(res.error, res.msg_type);
 
             switch(res.msg_type) {
-                case 'authorize':
-                    window.Engine.onAuthorized(res);
-                    break;
                 case 'balance':
                     window.Engine.ui.updateBalance(res.balance.balance);
                     break;
@@ -319,7 +369,7 @@
                     break;
             }
 
-            // Track subscription IDs
+            // Map Subscription IDs
             if (res.subscription) {
                 if (res.msg_type === 'tick') window.Engine.subs.track('tick', res.subscription.id);
                 if (res.msg_type === 'proposal_open_contract') window.Engine.subs.track('poc', res.subscription.id);
@@ -420,10 +470,10 @@
             this.tradesInCurrentMarket = 0;
             
             this.activeThreshold = 1;
-            this.activeBuyPayload = null; // Cached for zero-serialization execution
+            this.activeBuyPayload = null; 
             this.cachedStakeStr = "2.00";
             
-            this.trackedContractId = null; // Prevents race conditions
+            this.trackedContractId = null; 
         }
 
         syncParameters() {
@@ -450,7 +500,6 @@
             this.cachedStakeStr = calculatedStake.toFixed(2);
             const floatStake = parseFloat(this.cachedStakeStr);
 
-            // Pre-serialize payload to bypass JS JSON overhead during critical execution path
             this.activeBuyPayload = {
                 buy: 1, 
                 price: floatStake,
@@ -482,18 +531,16 @@
 
             if (triggered) {
                 this.engineState = 'TRADING';
-                // ULTRA-LOW LATENCY EXECUTION
                 window.Engine.conn.send(this.activeBuyPayload); 
                 window.Engine.ui.updateStake(this.cachedStakeStr);
             }
         }
 
         onBuyAcknowledge(buyData) {
-            this.trackedContractId = buyData.contract_id; // Secure context to specific trade
+            this.trackedContractId = buyData.contract_id;
         }
 
         onContractUpdate(contract) {
-            // Ignore updates from historical or unmatched contracts
             if (contract.contract_id !== this.trackedContractId) return;
             if (contract.is_sold && this.engineState === 'TRADING') this.handleResolution(contract);
         }
@@ -518,7 +565,6 @@
                 this.precompileExecutionEngine(); 
             }
 
-            // Offload UI updates outside the execution critical path
             setTimeout(() => {
                 window.Engine.ui.updateProgress(this.milestoneData.current, CONFIG.MILESTONE_SESSIONS, this.milestoneData.subProfit, this.milestoneData.subTarget, this.milestoneData.totalProfit);
                 window.Engine.ui.logTrade(contract);
@@ -576,21 +622,20 @@
 
         handleApiError(error, context) {
             console.error(`[Deriv API Error: ${context}]`, error.message);
-            this.ui.updateStatus(`API ERROR: ${error.message}`, "var(--danger)");
+            this.ui.updateStatus(`API ERROR: ${error.message.toUpperCase()}`, "var(--danger)");
             
             if (context === 'buy' && this.trade.engineState === 'TRADING') {
                 this.trade.engineState = 'ACTIVE';
                 this.trade.updateStatusUI();
-            } else if (context === 'authorize') {
+            } else if (context === 'OAuth_REST') {
                 this.trade.botStopped = true;
-                this.conn.ws.close();
             }
         }
 
-        onAuthorized(res) {
+        onAuthorized(accountId) {
             this.trade.botStopped = false; 
-            this.ui.updateStatus("CONNECTED! STRUCTURING ASSETS...", "var(--primary)");
-            this.ui.clearTokenUI(); // Secure token visually post-connection
+            this.ui.updateStatus(`CONNECTED [${accountId}]. MOUNTING WEBSOCKET...`, "var(--success)");
+            this.ui.clearTokenUI(); 
             
             this.conn.send({ balance: 1, subscribe: 1 });
             this.conn.send({ proposal_open_contract: 1, subscribe: 1 });
@@ -611,7 +656,6 @@
         window.Engine.conn.connect(token);
     }
     
-    // Bind global HTML UI closer
     function closeAudit() { window.Engine.ui.closeAudit(); }
 </script>
 </body>
